@@ -90,7 +90,9 @@ step "Setting up database…"
 cd "$INSTALL_DIR"
 npm install --silent 2>/dev/null || fail "npm install failed."
 npx prisma generate > /dev/null 2>&1 || fail "Prisma generate failed."
-npx prisma migrate deploy > /dev/null 2>&1 || fail "Database setup failed."
+npx prisma migrate deploy > /dev/null 2>&1 \
+  || npx prisma migrate dev --name init --skip-seed --skip-generate > /dev/null 2>&1 \
+  || fail "Database setup failed."
 success "Database ready"
 
 # Build + start
