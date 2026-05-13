@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# InboxPro bootstrap — run this once on a new Mac.
-# Downloads InboxPro from GitHub and launches the full installer.
+# InboxPro — one-click launcher, updater, and installer.
+# Double-click to open InboxPro. Works whether it's already running,
+# needs a restart, or is being installed for the first time.
 
 # If not running inside a terminal, relaunch self inside Terminal.app
 if [ ! -t 1 ]; then
@@ -11,26 +12,51 @@ if [ ! -t 1 ]; then
   exit 0
 fi
 
-cd "$HOME"
-
-GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; RED='\033[0;31m'; DIM='\033[2m'; NC='\033[0m'
+GREEN='\033[0;32m'; BLUE='\033[0;34m'; RED='\033[0;31m'; DIM='\033[2m'; NC='\033[0m'
 step()    { echo -e "${BLUE}▸${NC} $1"; }
 success() { echo -e "${GREEN}✓${NC} $1"; }
 fail()    { echo -e "${RED}✗${NC} $1"; echo; read -rp "Press Enter to close."; exit 1; }
 
-clear
-echo
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${BLUE}  InboxPro setup${NC}"
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo
-
 INSTALL_DIR="$HOME/Documents/inbox-app"
 REPO_URL="https://github.com/jacobbrachna/inbox-app.git"
 
-# ── 1. Homebrew ────────────────────────────────────────────────────────────
+# ── Path 1: Already running — just open the browser ────────────────────────
+if curl -sf -o /dev/null http://localhost:3030/api/state 2>/dev/null; then
+  success "InboxPro is already running"
+  open "http://localhost:3030"
+  exit 0
+fi
+
+clear
+echo
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${BLUE}  InboxPro${NC}"
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo
+
+# ── Path 2: Installed but not running — pull latest + restart ──────────────
+if [ -d "$INSTALL_DIR/.git" ]; then
+  step "Pulling latest updates…"
+  git -C "$INSTALL_DIR" pull --ff-only 2>/dev/null || true
+  success "Up to date"
+
+  step "Starting InboxPro…"
+  cd "$INSTALL_DIR"
+  npm run restart > /dev/null 2>&1 \
+    || fail "Could not start InboxPro. Check /tmp/inboxpro-prod.log"
+  success "InboxPro is running"
+
+  open "http://localhost:3030"
+  echo
+  echo -e "${DIM}Press Enter to close this window.${NC}"
+  read -rp ""
+  exit 0
+fi
+
+# ── Path 3: Fresh install ──────────────────────────────────────────────────
+
+# Homebrew
 if ! command -v brew >/dev/null 2>&1; then
-  # Check common locations before installing
   if [ -f /opt/homebrew/bin/brew ]; then
     eval "$(/opt/homebrew/bin/brew shellenv)"
   elif [ -f /usr/local/bin/brew ]; then
@@ -46,26 +72,46 @@ if ! command -v brew >/dev/null 2>&1; then
 fi
 success "Homebrew ready"
 
-# ── 2. Node.js ─────────────────────────────────────────────────────────────
+# Node.js
 if ! command -v node >/dev/null 2>&1; then
   step "Installing Node.js…"
   brew install node || fail "Node.js install failed."
 fi
 success "Node.js ready"
 
-# ── 3. Clone or update ─────────────────────────────────────────────────────
-if [ -d "$INSTALL_DIR/.git" ]; then
-  step "InboxPro already installed — pulling latest…"
-  git -C "$INSTALL_DIR" pull --ff-only \
-    || fail "Update failed. Try again or contact Jacob."
-  success "Up to date"
-else
-  step "Downloading InboxPro…"
-  git clone "$REPO_URL" "$INSTALL_DIR" \
-    || fail "Download failed. Check your internet connection and try again."
-  success "Downloaded to ~/Documents/inbox-app"
-fi
+# Clone
+step "Downloading InboxPro…"
+git clone "$REPO_URL" "$INSTALL_DIR" \
+  || fail "Download failed. Check your internet connection and try again."
+success "Downloaded"
 
-# ── 4. Run the installer ───────────────────────────────────────────────────
+# Install deps + migrate
+step "Setting up database…"
+cd "$INSTALL_DIR"
+npm install --silent 2>/dev/null || fail "npm install failed."
+npx prisma generate > /dev/null 2>&1 || fail "Prisma generate failed."
+npx prisma migrate deploy > /dev/null 2>&1 || fail "Database setup failed."
+success "Database ready"
+
+# Build + start
+step "Building and starting InboxPro (~30s)…"
+npm run restart > /dev/null 2>&1 \
+  || fail "Could not start InboxPro. Check /tmp/inboxpro-prod.log"
+success "InboxPro is running"
+
+open -a "Google Chrome" "chrome://extensions" 2>/dev/null || true
+sleep 1
+open "http://localhost:3030"
+
 echo
-bash "$INSTALL_DIR/Install InboxPro.command"
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}  ✓ InboxPro is ready${NC}"
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo
+echo "ONE LAST STEP: load the Chrome extension."
+echo
+echo -e "  ${BLUE}1.${NC} Toggle Developer mode (top-right in chrome://extensions)"
+echo -e "  ${BLUE}2.${NC} Click Load unpacked"
+echo -e "  ${BLUE}3.${NC} Select: ${DIM}$INSTALL_DIR/extension${NC}"
+echo
+read -rp "Press Enter to close."
