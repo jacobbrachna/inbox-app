@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
 # InboxPro bootstrap — run this once on a new Mac.
-# Right-click → Open on first run (macOS security), double-click after that.
 # Downloads InboxPro from GitHub and launches the full installer.
+
+# If not running inside a terminal, relaunch self inside Terminal.app
+if [ ! -t 1 ]; then
+  SELF="$0"
+  osascript \
+    -e 'tell application "Terminal" to activate' \
+    -e "tell application \"Terminal\" to do script \"'$SELF'; exit\""
+  exit 0
+fi
 
 cd "$HOME"
 
@@ -24,7 +32,6 @@ if ! command -v brew >/dev/null 2>&1; then
   step "Installing Homebrew (you may be asked for your Mac password once)…"
   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" \
     || fail "Homebrew install failed. Visit https://brew.sh for help."
-  # Add brew to PATH (Apple Silicon vs Intel)
   eval "$(/opt/homebrew/bin/brew shellenv)" 2>/dev/null \
     || eval "$(/usr/local/bin/brew shellenv)" 2>/dev/null \
     || true
@@ -63,15 +70,6 @@ else
   success "Downloaded to ~/Documents/inbox-app"
 fi
 
-# ── 5. Launch the installer ────────────────────────────────────────────────
+# ── 5. Run the installer in this same window ───────────────────────────────
 echo
-step "Launching installer — follow the window that opens…"
-open "$INSTALL_DIR/Install InboxPro.command" \
-  || fail "Could not open the installer. Try opening it manually from ~/Documents/inbox-app."
-
-echo
-echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}  ✓ Installer launched — you can close this window${NC}"
-echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo
-read -rp "Press Enter to close."
+bash "$INSTALL_DIR/Install InboxPro.command"
