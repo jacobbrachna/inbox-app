@@ -26,38 +26,34 @@ echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━�
 echo
 
 INSTALL_DIR="$HOME/Documents/inbox-app"
+REPO_URL="https://github.com/jacobbrachna/inbox-app.git"
 
 # ── 1. Homebrew ────────────────────────────────────────────────────────────
 if ! command -v brew >/dev/null 2>&1; then
-  step "Installing Homebrew (you may be asked for your Mac password once)…"
-  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" \
-    || fail "Homebrew install failed. Visit https://brew.sh for help."
-  eval "$(/opt/homebrew/bin/brew shellenv)" 2>/dev/null \
-    || eval "$(/usr/local/bin/brew shellenv)" 2>/dev/null \
-    || true
+  # Check common locations before installing
+  if [ -f /opt/homebrew/bin/brew ]; then
+    eval "$(/opt/homebrew/bin/brew shellenv)"
+  elif [ -f /usr/local/bin/brew ]; then
+    eval "$(/usr/local/bin/brew shellenv)"
+  else
+    step "Installing Homebrew (you may be asked for your Mac password once)…"
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" \
+      || fail "Homebrew install failed. Visit https://brew.sh for help."
+    eval "$(/opt/homebrew/bin/brew shellenv)" 2>/dev/null \
+      || eval "$(/usr/local/bin/brew shellenv)" 2>/dev/null \
+      || true
+  fi
 fi
 success "Homebrew ready"
 
-# ── 2. GitHub CLI ──────────────────────────────────────────────────────────
-if ! command -v gh >/dev/null 2>&1; then
-  step "Installing GitHub CLI…"
-  brew install gh || fail "GitHub CLI install failed."
+# ── 2. Node.js ─────────────────────────────────────────────────────────────
+if ! command -v node >/dev/null 2>&1; then
+  step "Installing Node.js…"
+  brew install node || fail "Node.js install failed."
 fi
-success "GitHub CLI ready"
+success "Node.js ready"
 
-# ── 3. GitHub login ────────────────────────────────────────────────────────
-if ! gh auth status --hostname github.com >/dev/null 2>&1; then
-  echo
-  step "Connecting to GitHub — your browser will open to log in"
-  echo -e "  ${DIM}Follow the prompts in your browser, then come back here.${NC}"
-  echo
-  gh auth login --hostname github.com --git-protocol https --web \
-    || fail "GitHub login failed. Make sure you've accepted the invite email first."
-  echo
-fi
-success "GitHub connected"
-
-# ── 4. Clone or update ─────────────────────────────────────────────────────
+# ── 3. Clone or update ─────────────────────────────────────────────────────
 if [ -d "$INSTALL_DIR/.git" ]; then
   step "InboxPro already installed — pulling latest…"
   git -C "$INSTALL_DIR" pull --ff-only \
@@ -65,11 +61,11 @@ if [ -d "$INSTALL_DIR/.git" ]; then
   success "Up to date"
 else
   step "Downloading InboxPro…"
-  gh repo clone jacobbrachna/inbox-app "$INSTALL_DIR" \
-    || fail "Download failed. Make sure you accepted the GitHub invite email before running this."
+  git clone "$REPO_URL" "$INSTALL_DIR" \
+    || fail "Download failed. Check your internet connection and try again."
   success "Downloaded to ~/Documents/inbox-app"
 fi
 
-# ── 5. Run the installer in this same window ───────────────────────────────
+# ── 4. Run the installer ───────────────────────────────────────────────────
 echo
 bash "$INSTALL_DIR/Install InboxPro.command"
