@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <style>
+    :root {
+      --bg: #F4F4F5;
+      --card: #FFFFFF;
+      --card-hover: #FAFAFA;
+      --surface: #F1F1F1;
+      --hairline: #E5E5E5;
+      --text-primary: #18181B;
+      --text-secondary: #52525B;
+      --text-tertiary: #71717A;
+      --text-muted: #A1A1AA;
+      --accent: #2563EB;
+      --accent-soft: rgba(37, 99, 235, 0.10);
+      --accent-deep: #1D4ED8;
+      --accent-fg: #1E3A8A;
+      --danger: #DC2626;
+      --success: #16A34A;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 1px 3px rgba(0, 0, 0, 0.04);
+      --ease: cubic-bezier(0.25, 1, 0.5, 1);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0A0A0A;
+        --card: #161616;
+        --card-hover: #1E1E1E;
+        --surface: #1A1A1A;
+        --hairline: #262626;
+        --text-primary: #FAFAFA;
+        --text-secondary: #D4D4D4;
+        --text-tertiary: #A1A1A1;
+        --text-muted: #71717A;
+        --accent: #3B82F6;
+        --accent-soft: rgba(59, 130, 246, 0.16);
+        --accent-deep: #2563EB;
+        --accent-fg: #BFDBFE;
+        --danger: #F87171;
+        --success: #34D399;
+        --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.2);
+      }
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      width: 320px;
+      padding: 18px;
+      background: var(--bg);
+      color: var(--text-primary);
+      font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', system-ui, sans-serif;
+      font-size: 13px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── Header ── */
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .logo-tile {
+      width: 36px;
+      height: 36px;
+      background: var(--accent-soft);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      font-weight: 700;
+      font-size: 16px;
+      color: var(--accent-deep);
+      letter-spacing: -0.02em;
+    }
+    .logo-title {
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      color: var(--text-primary);
+    }
+    .logo-sub {
+      font-size: 10px;
+      color: var(--text-tertiary);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      margin-top: 2px;
+      font-weight: 500;
+    }
+
+    /* ── Status pill ── */
+    .status-box {
+      background: var(--card);
+      border: 1px solid var(--hairline);
+      border-radius: 10px;
+      padding: 10px 12px;
+      margin-bottom: 12px;
+      font-size: 12px;
+      color: var(--text-secondary);
+      min-height: 38px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      box-shadow: var(--shadow);
+      transition: all 180ms var(--ease);
+    }
+    .status-box::before {
+      content: '';
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      background: var(--text-muted);
+      flex-shrink: 0;
+    }
+    .status-box.success { color: var(--success); }
+    .status-box.success::before { background: var(--success); }
+    .status-box.error { color: var(--danger); }
+    .status-box.error::before { background: var(--danger); }
+
+    /* ── Primary button ── */
+    .btn {
+      width: 100%;
+      padding: 10px 14px;
+      background: var(--accent-deep);
+      color: white;
+      border: none;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: -0.005em;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: all 160ms var(--ease);
+      font-family: inherit;
+    }
+    .btn:hover:not(:disabled) {
+      background: var(--accent);
+      transform: translateY(-1px);
+    }
+    .btn:active:not(:disabled) { transform: scale(0.98); }
+    .btn:disabled {
+      background: var(--surface);
+      color: var(--text-muted);
+      cursor: not-allowed;
+    }
+
+    /* ── Progress + hint text ── */
+    .progress {
+      margin-top: 8px;
+      font-size: 11px;
+      color: var(--text-tertiary);
+      text-align: center;
+      min-height: 14px;
+      font-family: ui-monospace, SFMono-Regular, monospace;
+    }
+    .hint {
+      margin-top: 12px;
+      font-size: 11px;
+      color: var(--text-muted);
+      text-align: center;
+      line-height: 1.45;
+    }
+
+    /* ── Footer link ── */
+    .footer {
+      margin-top: 14px;
+      padding-top: 12px;
+      border-top: 1px solid var(--hairline);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+    .footer a {
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 11.5px;
+      font-weight: 500;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      transition: color 140ms var(--ease);
+    }
+    .footer a:hover { color: var(--accent-deep); }
+    .footer-debug {
+      color: var(--text-muted);
+      font-size: 10px;
+      background: none;
+      border: none;
+      padding: 4px 6px;
+      cursor: pointer;
+      border-radius: 6px;
+      font-family: inherit;
+      transition: all 140ms var(--ease);
+    }
+    .footer-debug:hover {
+      color: var(--text-secondary);
+      background: var(--card-hover);
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spin { animation: spin 0.9s linear infinite; }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <div class="logo-tile">i</div>
+    <div>
+      <div class="logo-title">InboxPro</div>
+      <div class="logo-sub">LinkedIn · Sales Nav</div>
+    </div>
+  </div>
+
+  <div class="status-box" id="status">Ready to sync</div>
+
+  <button class="btn" id="syncBtn">
+    <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
+      <polyline points="23 4 23 10 17 10"></polyline>
+      <polyline points="1 20 1 14 7 14"></polyline>
+      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+    </svg>
+    Sync inbox now
+  </button>
+  <div class="progress" id="progress"></div>
+  <div class="hint" id="hint">Make sure InboxPro is running on localhost:3030</div>
+
+  <div class="footer">
+    <a href="http://localhost:3030" target="_blank">
+      Open InboxPro
+      <svg width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
+        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+        <polyline points="15 3 21 3 21 9"></polyline>
+        <line x1="10" y1="14" x2="21" y2="3"></line>
+      </svg>
+    </a>
+    <button class="footer-debug" id="dumpBtn" title="Copy a JSON dump of the current LinkedIn messaging state to clipboard">
+      Copy debug
+    </button>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

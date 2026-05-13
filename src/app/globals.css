@@ -1,0 +1,265 @@
+@import "tailwindcss";
+
+/* ─── Clean neutral inbox ────────────────────────────────────────────────
+   Light: off-white with white cards.
+   Dark:  near-black with raised dark cards.
+   Single configurable accent — defaults to blue.
+   ──────────────────────────────────────────────────────────────────── */
+
+@font-face {
+  font-family: 'Geist';
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('https://cdn.jsdelivr.net/npm/geist@1.3.0/dist/fonts/geist-sans/Geist-Variable.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Geist Mono';
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('https://cdn.jsdelivr.net/npm/geist@1.3.0/dist/fonts/geist-mono/GeistMono-Variable.woff2') format('woff2');
+}
+
+@theme {
+  --font-sans: 'Geist', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, monospace;
+
+  /* Motion */
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* ── LIGHT (default) ── */
+  --color-bg: #F4F4F5;              /* off-white page */
+  --color-card: #FFFFFF;            /* clean white panels */
+  --color-card-hover: #FAFAFA;
+  --color-surface: #F4F4F5;
+  --color-surface-2: #E7E7E7;
+  --color-hairline: #E5E5E5;
+  --color-rule: #D4D4D4;
+
+  --color-text-primary: #18181B;
+  --color-text-secondary: #3F3F46;
+  --color-text-tertiary: #71717A;
+  --color-text-muted: #A1A1AA;
+
+  /* Accent — set --color-accent-rgb (R, G, B integers) to recolor the whole app.
+     All four derived accent tokens are computed from this single source. */
+  --color-accent-rgb: 37, 99, 235;             /* blue-600 default */
+  --color-accent: rgb(var(--color-accent-rgb));
+  --color-accent-soft: rgb(var(--color-accent-rgb) / 0.14);
+  --color-accent-deep: color-mix(in srgb, rgb(var(--color-accent-rgb)) 82%, #000);
+  --color-accent-fg: color-mix(in srgb, rgb(var(--color-accent-rgb)) 75%, #000);
+
+  --color-bubble-own: #2563EB;
+  --color-bubble-own-fg: #FFFFFF;
+  --color-bubble-them: #F4F4F5;
+
+  --color-danger: #DC2626;          /* red-600 */
+  --color-success: #16A34A;         /* green-600 */
+  --color-info: #0891B2;            /* cyan-600 */
+  --color-online: #10B981;          /* emerald-500 */
+
+  /* Three-layer card shadow — tight contact line, soft mid, gentle ambient.
+     Reads as "lifted but grounded" without being heavy. */
+  --shadow-card:
+    0 1px 2px rgba(15, 23, 42, 0.06),
+    0 3px 8px rgba(15, 23, 42, 0.04),
+    0 12px 24px -8px rgba(15, 23, 42, 0.05);
+  --shadow-raised:
+    0 1px 3px rgba(15, 23, 42, 0.08),
+    0 8px 20px rgba(15, 23, 42, 0.08),
+    0 24px 48px -12px rgba(15, 23, 42, 0.08);
+
+  --radius-card: 16px;
+  --radius-row: 10px;
+  --radius-pill: 999px;
+}
+
+/* ── DARK ── */
+[data-theme="dark"] {
+  --color-bg: #0A0A0A;
+  --color-card: #161616;
+  --color-card-hover: #1E1E1E;
+  --color-surface: #1A1A1A;
+  --color-surface-2: #262626;
+  --color-hairline: #262626;
+  --color-rule: #3F3F46;
+
+  --color-text-primary: #FAFAFA;
+  --color-text-secondary: #D4D4D4;
+  --color-text-tertiary: #A1A1A1;
+  --color-text-muted: #71717A;
+
+  /* Dark inherits --color-accent-rgb; recompute soft/deep/fg for dark surfaces */
+  --color-accent: rgb(var(--color-accent-rgb));
+  --color-accent-soft: rgb(var(--color-accent-rgb) / 0.18);
+  --color-accent-deep: color-mix(in srgb, rgb(var(--color-accent-rgb)) 92%, #fff);
+  --color-accent-fg: color-mix(in srgb, rgb(var(--color-accent-rgb)) 50%, #fff);
+
+  --color-bubble-own: #2563EB;
+  --color-bubble-own-fg: #FFFFFF;
+  --color-bubble-them: #262626;
+
+  --color-danger: #F87171;
+  --color-success: #34D399;
+  --color-info: #22D3EE;
+  --color-online: #10B981;
+
+  /* Dark mode shadows — more saturated/black to read against dark surfaces. */
+  --shadow-card:
+    0 1px 2px rgba(0, 0, 0, 0.5),
+    0 4px 12px rgba(0, 0, 0, 0.35),
+    0 16px 32px -8px rgba(0, 0, 0, 0.25);
+  --shadow-raised:
+    0 2px 6px rgba(0, 0, 0, 0.55),
+    0 12px 32px rgba(0, 0, 0, 0.45),
+    0 24px 48px -8px rgba(0, 0, 0, 0.35);
+}
+
+html, body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  font-feature-settings: 'ss01', 'cv11';
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background-color 240ms var(--ease-out-quart),
+              color 240ms var(--ease-out-quart);
+}
+
+* { box-sizing: border-box; }
+
+::selection {
+  background: var(--color-accent-soft);
+  color: var(--color-accent-fg);
+}
+
+/* Keyboard shortcut chip — single source of truth so every kbd reads the same.
+   Use as: <kbd className="kbd">⌘↵</kbd>. */
+kbd, .kbd {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  background: var(--color-surface-2);
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-hairline);
+  padding: 1px 5px;
+  border-radius: 5px;
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  line-height: 1;
+  box-shadow: 0 1px 0 var(--color-hairline);
+}
+
+/* Focus styles intentionally minimal — rely on background-color change for
+   state. (Previous global ring was too loud.) */
+
+/* Lucide icons — refine the default stroke from 2 to 1.5. The lucide-react
+   library outputs `.lucide` class on every SVG, so this single rule cleans up
+   icon weight across the entire UI without per-component changes.
+   Exception: anywhere a button explicitly sets strokeWidth (e.g. checkmarks
+   that need to read at small sizes) overrides this via inline attribute. */
+.lucide {
+  stroke-width: 1.5;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--color-rule);
+  border-radius: 999px;
+  transition: background 150ms var(--ease-out-quart);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--color-text-tertiary); }
+
+button { touch-action: manipulation; }
+
+/* Card primitive — the floating panel pattern */
+.card {
+  background: var(--color-card);
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  /* CSS containment — internal layout/style changes can't ripple out to the
+     rest of the page. Drastically reduces cost during window resize and scroll.
+     Omitting `paint` so absolute-positioned dropdowns (snooze, label picker,
+     etc.) can still visually escape the card if their parent allows it. */
+  contain: layout style;
+}
+
+.eyebrow {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes row-in {
+  from { opacity: 0; transform: translateY(2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Thread fade — fires when activeConversationId changes (via React key). */
+@keyframes thread-fade {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Dropdown/menu entrance — origin top-right since most of our menus anchor
+   there. Subtle scale + fade for a tactile pop-in. */
+@keyframes menu-in {
+  from { opacity: 0; transform: scale(0.96) translateY(-4px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+.menu-in { animation: menu-in 140ms var(--ease-out-quart); transform-origin: top right; }
+
+/* Input primitive — single source of truth for text inputs, textareas, and
+   datetime inputs. Follows the accent color picker (not hardcoded blue) and
+   uses themed placeholder. */
+.input {
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-hairline);
+  border-radius: 10px;
+  padding: 7px 12px;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 140ms var(--ease-out-quart), box-shadow 140ms var(--ease-out-quart);
+}
+.input::placeholder { color: var(--color-text-tertiary); }
+.input:focus { border-color: var(--color-accent); }
+.input:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* Deterministic monogram tile — bg + text color derived from a hue variable
+   set inline via `style={{ '--mono-hue': hueForName(name) }}`. Refined
+   saturation/lightness so colors stay in the editorial palette range. */
+.monogram-tile {
+  background: hsl(var(--mono-hue, 220) 38% 92%);
+  color: hsl(var(--mono-hue, 220) 45% 32%);
+}
+[data-theme="dark"] .monogram-tile {
+  background: hsl(var(--mono-hue, 220) 25% 20%);
+  color: hsl(var(--mono-hue, 220) 38% 72%);
+}
+
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.6; }
+}
+.pulse-soft { animation: pulse-soft 2.4s var(--ease-out-quart) infinite; }

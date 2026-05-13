@@ -1,0 +1,67 @@
+{
+  "manifest_version": 3,
+  "name": "InboxPro",
+  "version": "1.0.0",
+  "description": "Sync your LinkedIn inbox to InboxPro",
+  "permissions": ["cookies", "storage", "tabs", "scripting", "activeTab", "notifications", "alarms"],
+  "web_accessible_resources": [
+    {
+      "resources": ["injected.js"],
+      "matches": ["*://*.linkedin.com/*"]
+    }
+  ],
+  "host_permissions": [
+    "*://*.linkedin.com/*",
+    "http://localhost:3030/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://www.linkedin.com/*"],
+      "js": ["injected.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["*://www.linkedin.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "world": "ISOLATED"
+    },
+    {
+      "matches": ["http://localhost:3030/*"],
+      "js": ["bridge.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://www.linkedin.com/in/*"],
+      "js": ["profile-capture.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://www.linkedin.com/mynetwork/invite-connect/connections/*"],
+      "js": ["harvest-button.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://www.linkedin.com/sales/*"],
+      "js": ["sn-sync-button.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "*://www.linkedin.com/mynetwork/*",
+        "*://www.linkedin.com/notifications/*",
+        "*://www.linkedin.com/feed/*"
+      ],
+      "js": ["link-harvester.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "InboxPro Sync"
+  }
+}

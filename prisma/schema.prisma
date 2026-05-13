@@ -1,0 +1,91 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model Conversation {
+  id              String   @id
+  source          String   @default("linkedin")
+  participants    String   // JSON array of Participant
+  lastMessage     String   @default("")
+  lastMessageAt   DateTime @default(now())
+  unreadCount     Int      @default(0)
+  status          String   @default("read")
+  isStarred       Boolean  @default(false)
+  snoozedUntil    DateTime?
+  followUpAt      DateTime?
+  notes           String   @default("")
+  labels          String   @default("[]") // JSON array of label IDs
+  rawData         String?  // Raw LinkedIn response — future-proofing
+  // AI-derived fields. Populated by /api/ai/* routes, cached so we don't
+  // re-classify every render. aiCategory is one of:
+  //   cold-pitch | warm-lead | client | recruiter | spam | intro | other
+  aiCategory      String?
+  aiSummary       String?  // 1-sentence rolling summary of the thread
+  aiUpdatedAt     DateTime?
+  // AI Outbound-Queue scoring — populated by /api/queue/score-batch.
+  // priority: 0-100 (higher = more urgent for outbound work)
+  // signal:   short human description ("Asked about pricing", "Mentioned a deadline")
+  aiPriorityScore Int?
+  aiPrioritySignal String?
+  aiPriorityAt    DateTime?
+  // Enrichment fetched from LinkedIn's profile API (populated by extension).
+  // JSON: { company, role, location, currentRoleTenure, ... }
+  enrichment      String?
+  enrichmentAt    DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  messages        Message[]
+
+  @@index([lastMessageAt])
+  @@index([status])
+  @@index([followUpAt])
+  @@index([aiCategory])
+}
+
+model Message {
+  id              String   @id
+  conversationId  String
+  senderId        String
+  senderName      String
+  body            String
+  sentAt          DateTime
+  isFromMe        Boolean  @default(false)
+  rawData         String?  // Raw LinkedIn message JSON
+
+  conversation    Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, sentAt])
+}
+
+model Label {
+  id    String @id
+  name  String
+  color String
+}
+
+model Snippet {
+  id        String @id
+  name      String
+  shortcut  String
+  body      String
+}
+
+model AppState {
+  id                Int      @id @default(1)
+  myProfileUrn      String?
+  profileName       String?
+  profileAvatarUrl  String?
+  lastSyncedAt      DateTime?
+  // Stored server-side; never sent to the client. All Claude calls go through
+  // /api/ai/* routes which read this and call Anthropic.
+  anthropicApiKey   String?
+  // Optional: a few sentences describing the user's outreach style, written
+  // by them. Used as a system-prompt anchor for Draft Reply so generated
+  // drafts sound like them, not like ChatGPT.
+  aiStyleNote       String?
+}
