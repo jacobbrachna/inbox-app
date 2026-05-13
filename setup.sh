@@ -64,7 +64,12 @@ step "Installing dependencies (1–2 minutes)"
 npm install --silent || fail "npm install failed"
 success "Dependencies installed"
 
-# ── 4. Set up / migrate the database ──────────────────────────────────────
+# ── 4. Ensure .env exists with DATABASE_URL ────────────────────────────────
+if [ ! -f .env ] || ! grep -q "DATABASE_URL" .env; then
+  echo 'DATABASE_URL="file:./dev.db"' >> .env
+fi
+
+# ── 5. Set up / migrate the database ──────────────────────────────────────
 step "Applying database migrations"
 npx prisma generate >/dev/null 2>&1 || fail "Prisma generate failed"
 # migrate deploy is idempotent: creates DB on first run, applies pending
