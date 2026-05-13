@@ -34,14 +34,22 @@ echo -e "${BLUE}  InboxPro${NC}"
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo
 
-# ── Path 2: Installed but not running — pull latest + restart ──────────────
+# ── Path 2: Installed but not running — pull latest + ensure deps + restart ──
 if [ -d "$INSTALL_DIR/.git" ]; then
   step "Pulling latest updates…"
   git -C "$INSTALL_DIR" pull --ff-only 2>/dev/null || true
   success "Up to date"
 
-  step "Starting InboxPro…"
   cd "$INSTALL_DIR"
+
+  step "Checking dependencies…"
+  npm install --silent 2>/dev/null || fail "npm install failed."
+  npx prisma generate > /dev/null 2>&1 || true
+  npx prisma migrate deploy > /dev/null 2>&1 \
+    || npx prisma migrate dev --name init --skip-seed --skip-generate > /dev/null 2>&1 \
+    || true
+
+  step "Starting InboxPro…"
   npm run restart > /dev/null 2>&1 \
     || fail "Could not start InboxPro. Check /tmp/inboxpro-prod.log"
   success "InboxPro is running"
