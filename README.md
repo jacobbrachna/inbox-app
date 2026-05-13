@@ -4,20 +4,26 @@ A unified LinkedIn + Sales Navigator inbox. Local-first: your data stays on your
 
 ## Quick start (per teammate, ~5 min)
 
-### 1. Unzip the file you were sent
+### 1. Accept the GitHub invite
 
-Double-click `inbox-app-YYYY-MM-DD.zip` to unpack. You'll get an `inbox-app` folder.
+You'll get an email from GitHub. Click **Accept invitation** — that gives you access to the private repo.
 
-### 2. Double-click `Install InboxPro.command`
+### 2. Clone + launch the installer
 
-It's inside the unzipped folder. The installer:
-- Installs Homebrew + Node.js if missing (auto)
+Open **Terminal** (Cmd+Space → type `Terminal` → Enter) and paste this one line:
+
+```bash
+git clone https://github.com/jacobbrachna/inbox-app.git && cd inbox-app && open "Install InboxPro.command"
+```
+
+> **First time on a new Mac**, Git may prompt you to install Xcode Command Line Tools — click **Install**, wait ~2 min, then re-run the line above.
+
+The installer handles everything from there:
+- Installs Homebrew + Node.js if missing
 - Sets up the local database
 - Builds the production app
-- Starts the server
-- Opens Chrome to the extension page AND to InboxPro
-
-> **First time you run a `.command` file**, macOS Gatekeeper may block it (you'll see "cannot be opened because it is from an unidentified developer"). Workaround: **right-click** the file → **Open** → click **Open** in the dialog. Future double-clicks work normally.
+- Starts the server at `localhost:3030`
+- Opens Chrome to the extension page
 
 ### 3. Load the Chrome extension (3 clicks)
 
@@ -53,10 +59,15 @@ For the initial sync specifically: we hit LinkedIn's and SN's APIs directly via 
 
 ## Updating
 
-When you receive a new zip:
+When Jacob pushes a new version, open Terminal and run:
 
-1. Extract it OVER your existing `inbox-app` folder (your `dev.db` and logs stay — they're not in the zip)
-2. Double-click `Install InboxPro.command` again — it's idempotent
+```bash
+cd inbox-app
+git pull
+npm run update
+```
+
+That pulls the latest code, applies any new database migrations, and restarts the server. Your conversations and data are never touched.
 
 ## Privacy
 
@@ -91,9 +102,10 @@ When you receive a new zip:
 
 **Need to wipe everything** — Diagnostics → **Reset DB**. Requires typing `RESET` to confirm; destroys all conversations and messages but leaves your API key and labels.
 
-## Manual install (if you don't want to use the .command file)
+## Manual install (if you prefer the terminal)
 
 ```bash
+git clone https://github.com/jacobbrachna/inbox-app.git
 cd inbox-app
 bash setup.sh              # installs deps, runs DB migrations
 npm run restart            # builds + starts production server on :3030

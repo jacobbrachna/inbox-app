@@ -66,7 +66,7 @@ success "Dependencies installed"
 
 # ── 4. Set up / migrate the database ──────────────────────────────────────
 step "Applying database migrations"
-npx prisma generate --silent >/dev/null 2>&1 || fail "Prisma generate failed"
+npx prisma generate >/dev/null 2>&1 || fail "Prisma generate failed"
 # migrate deploy is idempotent: creates DB on first run, applies pending
 # migrations on subsequent runs. Safe for both fresh installs and updates.
 npx prisma migrate deploy >/dev/null 2>&1 \
