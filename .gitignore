@@ -51,3 +51,7 @@ prisma/dev.db-journal
 # runtime diagnostic logs
 sync-events.log
 captured-actions.log
+
+# debug sample captures — contain real LinkedIn data, never commit
+sn-samples/
+li-samples/
