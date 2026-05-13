@@ -6,23 +6,20 @@ A unified LinkedIn + Sales Navigator inbox. Local-first: your data stays on your
 
 ### 1. Accept the GitHub invite
 
-You'll get an email from GitHub. Click **Accept invitation** — that gives you access to the private repo.
+You'll get an email from GitHub. Click **Accept invitation**.
 
-### 2. Clone + launch the installer
+### 2. Download and run `Get InboxPro.command`
 
-Open **Terminal** (Cmd+Space → type `Terminal` → Enter) and paste this one line:
+Jacob will send you a link to this file. Download it, then:
 
-```bash
-git clone https://github.com/jacobbrachna/inbox-app.git && cd inbox-app && open "Install InboxPro.command"
-```
+- **Double-click** it to run
+- If macOS blocks it: **right-click → Open → Open** (one-time prompt, never again after this)
 
-> **First time on a new Mac**, Git may prompt you to install Xcode Command Line Tools — click **Install**, wait ~2 min, then re-run the line above.
-
-The installer handles everything from there:
+It handles everything automatically:
 - Installs Homebrew + Node.js if missing
-- Sets up the local database
-- Builds the production app
-- Starts the server at `localhost:3030`
+- Opens your browser to log into GitHub (just clicking, no typing)
+- Downloads InboxPro to `~/Documents/inbox-app`
+- Builds and starts the server at `localhost:3030`
 - Opens Chrome to the extension page
 
 ### 3. Load the Chrome extension (3 clicks)
@@ -105,8 +102,8 @@ That pulls the latest code, applies any new database migrations, and restarts th
 ## Manual install (if you prefer the terminal)
 
 ```bash
-git clone https://github.com/jacobbrachna/inbox-app.git
-cd inbox-app
+gh repo clone jacobbrachna/inbox-app ~/Documents/inbox-app
+cd ~/Documents/inbox-app
 bash setup.sh              # installs deps, runs DB migrations
 npm run restart            # builds + starts production server on :3030
 ```
