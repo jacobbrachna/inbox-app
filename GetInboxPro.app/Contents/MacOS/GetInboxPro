@@ -98,7 +98,8 @@ success "Downloaded"
 step "Setting up database…"
 cd "$INSTALL_DIR"
 npm install --silent 2>/dev/null || fail "npm install failed."
-npx prisma generate > /dev/null 2>&1 || fail "Prisma generate failed."
+  grep -q DATABASE_URL .env 2>/dev/null || echo 'DATABASE_URL="file:./dev.db"' >> .env
+  npx prisma generate > /dev/null 2>&1 || fail "Prisma generate failed."
 npx prisma migrate deploy > /dev/null 2>&1 \
   || npx prisma migrate dev --name init --skip-seed --skip-generate > /dev/null 2>&1 \
   || fail "Database setup failed."
