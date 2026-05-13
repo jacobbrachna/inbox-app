@@ -8,12 +8,9 @@ A unified LinkedIn + Sales Navigator inbox. Local-first: your data stays on your
 
 You'll get an email from GitHub. Click **Accept invitation**.
 
-### 2. Download and run `Get InboxPro.command`
+### 2. Download and run `GetInboxPro.app`
 
-Jacob will send you a link to this file. Download it, then:
-
-- **Double-click** it to run
-- If macOS blocks it: **right-click → Open → Open** (one-time prompt, never again after this)
+Jacob will send you this file directly. Just **double-click** it — no security warnings, no right-click workarounds.
 
 It handles everything automatically:
 - Installs Homebrew + Node.js if missing
