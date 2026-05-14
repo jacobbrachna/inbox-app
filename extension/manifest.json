@@ -46,6 +46,11 @@
       "run_at": "document_idle"
     },
     {
+      "matches": ["*://www.linkedin.com/messaging/*", "*://www.linkedin.com/"],
+      "js": ["li-sync-button.js"],
+      "run_at": "document_idle"
+    },
+    {
       "matches": ["*://www.linkedin.com/sales/*"],
       "js": ["sn-sync-button.js"],
       "run_at": "document_idle"

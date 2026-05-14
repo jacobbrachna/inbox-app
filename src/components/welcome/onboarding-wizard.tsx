@@ -8,7 +8,6 @@ import { useStore } from '@/store';
 const STEPS = [
   { id: 'extension', label: 'Extension', icon: Puzzle, optional: false },
   { id: 'signin', label: 'Sign in', icon: MessagesSquare, optional: false },
-  { id: 'sync', label: 'Sync', icon: Download, optional: false },
   { id: 'import', label: 'Import', icon: FileText, optional: true },
   { id: 'ai', label: 'AI', icon: Sparkles, optional: true },
   { id: 'done', label: 'Done', icon: Check, optional: false },
@@ -20,7 +19,7 @@ const STORAGE_KEY = 'inboxpro-onboarding-step';
 const COMPLETED_KEY = 'inboxpro-onboarded';
 
 export function OnboardingWizard({ preview = false }: { preview?: boolean }) {
-  const { conversations, loadFromServer } = useStore();
+  const { conversations } = useStore();
   const [step, setStep] = useState<number>(() => {
     // Preview mode always starts at step 0 so you can walk through cleanly.
     if (preview) return 0;
@@ -47,12 +46,12 @@ export function OnboardingWizard({ preview = false }: { preview?: boolean }) {
     return () => clearInterval(id);
   }, []);
 
-  // If user reloads after sync ran, skip ahead. Disabled in preview so you can
-  // step through the whole flow even with a populated DB.
+  // If user reloads with a well-populated DB, skip ahead past sign-in.
+  // Threshold of 20 prevents bridge-poll trickle from jumping the wizard.
   useEffect(() => {
     if (preview) return;
-    if (conversations.length > 0 && step < 3) {
-      setStep(3);
+    if (conversations.length >= 20 && step < 2) {
+      setStep(2);
     }
   }, [conversations.length, step, preview]);
 
@@ -113,7 +112,6 @@ export function OnboardingWizard({ preview = false }: { preview?: boolean }) {
         <div className="min-h-[280px]">
           {current.id === 'extension' && <ExtensionStep ready={extensionReady} onContinue={goNext} />}
           {current.id === 'signin' && <SignInStep extensionReady={extensionReady} />}
-          {current.id === 'sync' && <SyncStep onComplete={() => { loadFromServer(); goNext(); }} />}
           {current.id === 'import' && <ImportStep />}
           {current.id === 'ai' && <AiKeyStep />}
           {current.id === 'done' && <DoneStep />}
@@ -238,11 +236,12 @@ function SignInStep({ extensionReady }: { extensionReady: boolean }) {
   return (
     <div>
       <h2 className="text-[20px] font-semibold tracking-tight text-[var(--color-text-primary)]">
-        Sign into LinkedIn and Sales Navigator
+        Sign into LinkedIn and sync your inbox
       </h2>
       <p className="text-[13px] text-[var(--color-text-secondary)] mt-2 leading-relaxed">
-        Open LinkedIn and Sales Navigator in new tabs and make sure you're signed
-        in. InboxPro uses your existing browser session — no passwords needed.
+        Open LinkedIn messaging — a floating <strong className="text-[var(--color-text-primary)]">InboxPro sync button</strong> will
+        appear in the bottom-right corner. Click it to pull your full inbox.
+        For Sales Navigator, open <code className="kbd mx-0.5">linkedin.com/sales</code> and use the same button there.
       </p>
 
       <div className="mt-5 grid gap-3">
@@ -286,99 +285,6 @@ function SignInStep({ extensionReady }: { extensionReady: boolean }) {
           <p className="text-[11.5px] text-[var(--color-danger)] leading-relaxed">
             Extension not detected — go back to the previous step.
           </p>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function SyncStep({ onComplete }: { onComplete: () => void }) {
-  const [state, setState] = useState<'idle' | 'syncing' | 'done' | 'error'>('idle');
-  const [progress, setProgress] = useState('');
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    function onMessage(ev: MessageEvent) {
-      if (ev.source !== window || !ev.data) return;
-      if (ev.data.type === 'inboxpro-li-api-sync-progress') {
-        const p = ev.data.progress || {};
-        if (p.phase === 'inbox') {
-          setProgress(`Pulling ${p.category || ''} · ${p.convs ?? 0} convs · ${p.pages ?? 0} pages`);
-        } else if (p.phase === 'messages') {
-          setProgress(`Fetching message history · ${p.fetched ?? 0} / ${p.total ?? 0} threads`);
-        }
-      }
-      if (ev.data.type === 'inboxpro-li-initial-sync-api-result') {
-        const r = ev.data.response;
-        if (r?.ok) {
-          setState('done');
-          setProgress(`Loaded ${r.convs ?? 0} conversations · ${r.msgs ?? 0} messages`);
-          setTimeout(onComplete, 1500);
-        } else {
-          setState('error');
-          setError(r?.reason ?? 'Sync failed');
-        }
-      }
-    }
-    window.addEventListener('message', onMessage);
-    return () => window.removeEventListener('message', onMessage);
-  }, [onComplete]);
-
-  function start() {
-    setState('syncing');
-    setProgress('Starting…');
-    // Use the API-driven sync (background service worker, no LinkedIn tab needed)
-    window.postMessage({ type: 'inboxpro-li-initial-sync-api', deepFetch: true }, '*');
-  }
-
-  return (
-    <div>
-      <h2 className="text-[20px] font-semibold tracking-tight text-[var(--color-text-primary)]">
-        Sync your LinkedIn inbox
-      </h2>
-      <p className="text-[13px] text-[var(--color-text-secondary)] mt-2 leading-relaxed">
-        We'll pull your LinkedIn DMs directly via the LinkedIn API. No tab to
-        keep open, no scrolling — just <strong className="text-[var(--color-text-primary)]">leave
-        this page open while it runs</strong>. Usually 3-10 minutes depending on
-        inbox size.
-      </p>
-      <p className="text-[12px] text-[var(--color-text-tertiary)] mt-2 leading-relaxed">
-        If you use Sales Navigator, open it after this completes and click
-        the floating <em>"Sync this SN inbox"</em> button to pull those too.
-      </p>
-
-      {state === 'idle' && (
-        <button
-          onClick={start}
-          className="mt-5 w-full px-4 py-3 rounded-xl bg-[var(--color-accent-deep)] hover:bg-[var(--color-accent)] text-white text-[13px] font-semibold active:scale-[0.99]"
-          style={{ transition: 'background-color 140ms var(--ease-out-quart), transform 80ms var(--ease-out-quart)' }}
-        >
-          Start sync
-        </button>
-      )}
-      {state === 'syncing' && (
-        <div className="mt-5 p-4 rounded-xl bg-[var(--color-accent-soft)] border border-[var(--color-accent)]/30">
-          <div className="flex items-center gap-3">
-            <div className="w-4 h-4 border-2 border-[var(--color-accent)] border-t-transparent rounded-full animate-spin" />
-            <p className="text-[13px] font-medium text-[var(--color-accent-fg)]">{progress || 'Syncing…'}</p>
-          </div>
-        </div>
-      )}
-      {state === 'done' && (
-        <div className="mt-5 p-4 rounded-xl bg-[var(--color-success)]/10 border border-[var(--color-success)]/30 flex items-center gap-3">
-          <Check className="w-5 h-5 text-[var(--color-success)]" strokeWidth={2.5} />
-          <p className="text-[13px] font-semibold text-[var(--color-text-primary)]">{progress}</p>
-        </div>
-      )}
-      {state === 'error' && (
-        <div className="mt-5 p-4 rounded-xl bg-[var(--color-danger)]/10 border border-[var(--color-danger)]/30">
-          <p className="text-[12.5px] text-[var(--color-danger)]">{error}</p>
-          <button
-            onClick={start}
-            className="mt-3 text-[12px] font-semibold text-[var(--color-accent)] hover:text-[var(--color-accent-deep)]"
-          >
-            Try again
-          </button>
         </div>
       )}
     </div>
