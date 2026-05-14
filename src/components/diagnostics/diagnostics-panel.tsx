@@ -228,6 +228,8 @@ export function DiagnosticsPanel() {
   const [log, setLog] = useState<LogEntry[]>([]);
   const [bridgeReady, setBridgeReady] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [liSyncState, setLiSyncState] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
+  const [liSyncMsg, setLiSyncMsg] = useState('');
 
   async function loadAll() {
     // Load each endpoint independently — if one fails (e.g. /api/diagnostics
@@ -265,6 +267,35 @@ export function DiagnosticsPanel() {
 
   function forceRefresh() {
     window.postMessage({ type: 'inboxpro-refresh-request' }, '*');
+  }
+
+  function startFullLiSync() {
+    if (liSyncState === 'running') return;
+    setLiSyncState('running');
+    setLiSyncMsg('Starting…');
+
+    function onMsg(ev: MessageEvent) {
+      if (ev.source !== window || !ev.data) return;
+      if (ev.data.type === 'inboxpro-li-api-sync-progress') {
+        const p = ev.data.progress || {};
+        if (p.phase === 'inbox') setLiSyncMsg(`Pulling ${p.category || ''} · ${p.convs ?? 0} convs`);
+        else if (p.phase === 'messages') setLiSyncMsg(`Fetching messages · ${p.fetched ?? 0} / ${p.total ?? 0} threads`);
+      }
+      if (ev.data.type === 'inboxpro-li-initial-sync-api-result') {
+        window.removeEventListener('message', onMsg);
+        const r = ev.data.response;
+        if (r?.ok) {
+          setLiSyncState('done');
+          setLiSyncMsg(`Done · ${r.convs ?? 0} convs · ${r.msgs ?? 0} msgs`);
+          loadAll();
+        } else {
+          setLiSyncState('error');
+          setLiSyncMsg(r?.reason ?? 'Sync failed');
+        }
+      }
+    }
+    window.addEventListener('message', onMsg);
+    window.postMessage({ type: 'inboxpro-li-initial-sync-api', deepFetch: true }, '*');
   }
 
   return (
@@ -386,6 +417,15 @@ export function DiagnosticsPanel() {
             style={{ transition: 'background-color 140ms var(--ease-out-quart)' }}
           >
             <Trash2 className="w-3.5 h-3.5" /> Clear sync log
+          </button>
+          <button
+            onClick={startFullLiSync}
+            disabled={liSyncState === 'running' || !bridgeReady}
+            className="flex items-center gap-2 px-3 py-2 bg-[var(--color-card)] hover:bg-[var(--color-card-hover)] border border-[var(--color-hairline)] text-[var(--color-text-secondary)] disabled:opacity-50 disabled:cursor-not-allowed text-sm rounded-lg"
+            style={{ transition: 'background-color 140ms var(--ease-out-quart)' }}
+          >
+            <RefreshCw className={cn('w-3.5 h-3.5', liSyncState === 'running' && 'animate-spin')} />
+            {liSyncState === 'running' ? liSyncMsg : liSyncState === 'done' ? `✓ ${liSyncMsg}` : liSyncState === 'error' ? `✗ ${liSyncMsg}` : 'Full LinkedIn re-sync'}
           </button>
           <ResetButton onDone={loadAll} />
         </div>
