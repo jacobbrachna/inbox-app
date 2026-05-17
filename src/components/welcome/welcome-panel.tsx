@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { Zap, RefreshCw, AlertCircle, Check } from 'lucide-react';
 import { useStore } from '@/store';
+import { useExtensionReady, isExtensionReady } from '@/lib/use-extension-ready';
 
 type State = 'idle' | 'syncing' | 'done' | 'error' | 'no-extension';
 
@@ -10,22 +11,17 @@ export function WelcomePanel() {
   const [progress, setProgress] = useState('');
   const [error, setError] = useState('');
   const { loadFromServer } = useStore();
+  const extensionReady = useExtensionReady();
 
-  // Detect extension via DOM marker
+  // Drop to 'no-extension' once we know the bridge marker isn't there.
+  // A short delay lets the extension finish injecting on first load.
   useEffect(() => {
-    function check() {
-      const have = !!document.getElementById('inboxpro-bridge-marker');
-      if (!have) {
-        // Re-check briefly in case the marker hasn't been inserted yet
-        setTimeout(() => {
-          if (!document.getElementById('inboxpro-bridge-marker')) {
-            setState((s) => (s === 'idle' ? 'no-extension' : s));
-          }
-        }, 1500);
-      }
-    }
-    check();
-  }, []);
+    if (extensionReady) return;
+    const t = setTimeout(() => {
+      setState((s) => (s === 'idle' && !isExtensionReady() ? 'no-extension' : s));
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [extensionReady]);
 
   useEffect(() => {
     function onMessage(ev: MessageEvent) {
@@ -50,7 +46,7 @@ export function WelcomePanel() {
   }, [loadFromServer]);
 
   function startSync() {
-    if (!document.getElementById('inboxpro-bridge-marker')) {
+    if (!isExtensionReady()) {
       setState('no-extension');
       return;
     }

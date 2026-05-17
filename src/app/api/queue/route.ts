@@ -12,25 +12,9 @@ import type { Participant } from '@/types';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-interface QueueItem {
-  id: string;
-  name: string;
-  headline: string;
-  company: string | null;
-  avatarUrl: string | null;
-  aiCategory: string | null;
-  lastMessageAt: string;
-  reason: string;
-  daysSince: number;
-  // AI fields populated by /api/queue/score-batch
-  aiScore: number | null;
-  aiSignal: string | null;
-}
-
-export async function GET() {
-  const now = Date.now();
-  const convs = await prisma.conversation.findMany({
-    where: { status: { not: 'archived' } },
+function loadPage(ids: string[]) {
+  return prisma.conversation.findMany({
+    where: { id: { in: ids } },
     include: {
       messages: {
         select: { sentAt: true, isFromMe: true },
@@ -42,6 +26,39 @@ export async function GET() {
       },
     },
   });
+}
+
+interface QueueItem {
+  id: string;
+  name: string;
+  headline: string;
+  company: string | null;
+  avatarUrl: string | null;
+  lastMessageAt: string;
+  reason: string;
+  daysSince: number;
+  // AI fields populated by /api/queue/score-batch
+  aiScore: number | null;
+  aiSignal: string | null;
+}
+
+export async function GET() {
+  const now = Date.now();
+
+  // Page through to stay under SQLite's 999-param limit on the message
+  // include + _count subquery.
+  const convIds = await prisma.conversation.findMany({
+    where: { status: { not: 'archived' } },
+    select: { id: true },
+    orderBy: { lastMessageAt: 'desc' },
+  });
+  const convs: Awaited<ReturnType<typeof loadPage>> = [];
+  const PAGE = 100;
+  for (let i = 0; i < convIds.length; i += PAGE) {
+    const slice = convIds.slice(i, i + PAGE).map((c) => c.id);
+    const page = await loadPage(slice);
+    convs.push(...page);
+  }
 
   const hot: QueueItem[] = [];
   const overdue: QueueItem[] = [];
@@ -61,7 +78,6 @@ export async function GET() {
       headline: p?.headline ?? '',
       company: enrichment?.company ?? null,
       avatarUrl: p?.avatarUrl ?? null,
-      aiCategory: c.aiCategory,
       lastMessageAt: c.lastMessageAt.toISOString(),
       aiScore: c.aiPriorityScore ?? null,
       aiSignal: c.aiPrioritySignal ?? null,
@@ -107,8 +123,7 @@ export async function GET() {
       continue;
     }
 
-    // Stale — had at least one real reply, but quiet 30+ days. No longer
-    // requires aiCategory.
+    // Stale — had at least one real reply, but quiet 30+ days.
     if (inboundReplyCount > 0 && daysSinceLast >= 30) {
       stale.push({
         ...base,

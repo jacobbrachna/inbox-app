@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { CORS, safeParseArray, optionsResponse } from '@/lib/api-utils';
 import type { Participant } from '@/types';
+import { upsertContact, linkContactToConversation, extractProfileSlug } from '@/lib/contact-upsert';
+import { logParserResult } from '@/lib/parser-log';
 
 // POST { url, name, headline?, location?, company?, role? }
 // Called by the /in/* content script. We match by name (case-insensitive,
@@ -25,6 +27,22 @@ export async function POST(req: NextRequest) {
     const location = typeof body.location === 'string' ? body.location : undefined;
     const company = typeof body.company === 'string' ? body.company : undefined;
     const role = typeof body.role === 'string' ? body.role : undefined;
+    const about = typeof body.about === 'string' ? body.about : undefined;
+    const prevRoles = Array.isArray(body.prevRoles) ? body.prevRoles : undefined;
+    const education = Array.isArray(body.education) ? body.education : undefined;
+    const recentPosts = Array.isArray(body.recentPosts) ? body.recentPosts : undefined;
+
+    // Telemetry: success = we got at least name+(role|company|about). The
+    // banner-only case (name + nothing else) means the scraper completed
+    // but LinkedIn's structure wasn't where we expected → likely shape drift.
+    const richSuccess = !!(role || company || about || (Array.isArray(prevRoles) && prevRoles.length));
+    logParserResult('profile-capture-dom', richSuccess, {
+      hasName: !!name,
+      hasRole: !!role,
+      hasCompany: !!company,
+      hasAbout: !!about,
+      prevRolesCount: Array.isArray(prevRoles) ? prevRoles.length : 0,
+    });
 
     // Find candidates by normalized name
     // (SQLite collation is case-insensitive only for ASCII — do it in JS).
@@ -84,6 +102,12 @@ export async function POST(req: NextRequest) {
       if (role && (canOverwriteFields || !merged.role)) merged.role = role;
       if (location && (canOverwriteFields || !merged.location)) merged.location = location;
       if (headline && (canOverwriteFields || !merged.headline)) merged.headline = headline;
+      // Rich Phase 2 fields — overwrite when present (DOM scrape is the most
+      // current source for these).
+      if (about) merged.about = about;
+      if (prevRoles) merged.prevRoles = prevRoles;
+      if (education) merged.education = education;
+      if (recentPosts) merged.recentPosts = recentPosts;
       // Only bump source upward, never down
       if (canOverwriteFields) merged.source = 'dom-capture';
 
@@ -101,7 +125,30 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({ ok: true, matched: matches.length, updated }, { headers: CORS });
+    // Mirror to Contact table. DOM-capture priority (3) is higher than
+    // harvest, lower than CSV import — so partial fills are safe.
+    const contactId = await upsertContact({
+      profileUrl: url,
+      profileSlug: extractProfileSlug(url),
+      name,
+      headline: headline ?? null,
+      company: company ?? null,
+      role: role ?? null,
+      location: location ?? null,
+      about: about ?? null,
+      prevRoles: prevRoles ?? null,
+      education: education ?? null,
+      recentPosts: recentPosts ?? null,
+      source: 'dom-capture',
+    });
+    if (contactId) {
+      // Link to every conversation we just patched.
+      for (const c of sorted) {
+        await linkContactToConversation(contactId, c.id);
+      }
+    }
+
+    return NextResponse.json({ ok: true, matched: matches.length, updated, contactId }, { headers: CORS });
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : 'unknown' },

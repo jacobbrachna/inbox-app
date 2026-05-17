@@ -9,12 +9,13 @@ import { CompanyFilter } from './company-filter';
 import { RoleFilter, RecencyFilter, HasNotesFilter } from './extra-filters';
 import { filterConversations } from '@/lib/filter';
 import { useResizableColumn } from '@/lib/use-resizable-column';
+import { isExtensionReady } from '@/lib/use-extension-ready';
 
 export function ConversationList() {
   const {
     conversations, activeFilter, searchQuery, setSearchQuery,
     setActiveConversationId, activeConversationId, loadFromServer,
-    selectedIds,
+    selectedIds, labels, currentRoleOnly, currentRoleStart,
   } = useStore();
   const [refreshing, setRefreshing] = useState(false);
   const [refreshMsg, setRefreshMsg] = useState<string | null>(null);
@@ -46,7 +47,7 @@ export function ConversationList() {
   }, [loadFromServer]);
 
   function handleRefresh() {
-    if (!document.getElementById('inboxpro-bridge-marker')) {
+    if (!isExtensionReady()) {
       setRefreshMsg('Extension not loaded — install / reload it.');
       setTimeout(() => setRefreshMsg(null), 4000);
       return;
@@ -95,12 +96,16 @@ export function ConversationList() {
   }
 
   const filtered = useMemo(() => {
+    const roleStart = currentRoleOnly && currentRoleStart ? new Date(currentRoleStart) : null;
     if (smartMode && smartIds) {
       // Preserve recency order from `conversations`, intersect with smart results
-      return conversations.filter((c) => smartIds.has(c.id));
+      const base = conversations.filter((c) => smartIds.has(c.id));
+      return roleStart
+        ? base.filter((c) => new Date(c.lastMessageAt).getTime() >= roleStart.getTime())
+        : base;
     }
-    return filterConversations(conversations, activeFilter, searchQuery);
-  }, [conversations, activeFilter, searchQuery, smartMode, smartIds]);
+    return filterConversations(conversations, activeFilter, searchQuery, roleStart);
+  }, [conversations, activeFilter, searchQuery, smartMode, smartIds, currentRoleOnly, currentRoleStart]);
 
   const totalUnread = conversations.filter((c) => c.status === 'unread').length;
 
@@ -109,11 +114,15 @@ export function ConversationList() {
     if (activeFilter === 'unread') return 'Unread';
     if (activeFilter === 'starred') return 'Starred';
     if (activeFilter === 'snoozed') return 'Snoozed';
+    if (activeFilter === 'drafts') return 'Drafts';
     if (activeFilter === 'follow-up') return 'Follow up';
     if (activeFilter === 'archived') return 'Archived';
     if (activeFilter === 'linkedin') return 'LinkedIn DMs';
     if (activeFilter === 'sales_nav') return 'Sales Navigator';
-    if (activeFilter?.startsWith('label:')) return activeFilter.replace('label:', '');
+    if (activeFilter?.startsWith('label:')) {
+      const labelId = activeFilter.replace('label:', '');
+      return labels.find((l) => l.id === labelId)?.name ?? labelId;
+    }
     if (activeFilter?.startsWith('company:')) return activeFilter.replace('company:', '');
     if (activeFilter?.startsWith('role:')) return `Role: ${activeFilter.replace('role:', '')}`;
     if (activeFilter === 'recency:7d') return 'Last 7 days';
@@ -286,7 +295,10 @@ export function ConversationList() {
             </div>
           </div>
         ) : (
-          <div className="flex flex-col gap-0.5">
+          // Key on activeFilter so React swaps the list wrapper when the
+          // filter changes — re-firing the thread-fade animation for a
+          // gentle cross-fade between Inbox / Unread / Starred / labels.
+          <div key={activeFilter} className="thread-fade flex flex-col gap-0.5">
             {filtered.map((convo) => (
               <ConversationItem
                 key={convo.id}

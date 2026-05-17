@@ -7,7 +7,7 @@ import { CORS, optionsResponse } from '@/lib/api-utils';
 export async function GET() {
   const rows = await prisma.conversation.findMany({
     where: {
-      OR: [{ aiCategory: null }, { aiSummary: null }],
+      aiSummary: null,
       status: { not: 'archived' },
     },
     orderBy: { lastMessageAt: 'desc' },

@@ -1,9 +1,9 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { Sun, Moon } from 'lucide-react';
+import { storage } from '@/lib/storage';
 
 type Theme = 'dark' | 'light';
-const STORAGE_KEY = 'inbox-theme';
 
 function applyTheme(theme: Theme) {
   if (theme === 'dark') {
@@ -30,9 +30,21 @@ export function ThemeToggle() {
 
   function toggle() {
     const next: Theme = theme === 'dark' ? 'light' : 'dark';
-    setTheme(next);
-    applyTheme(next);
-    try { window.localStorage.setItem(STORAGE_KEY, next); } catch {}
+    const commit = () => {
+      setTheme(next);
+      applyTheme(next);
+      storage.theme.set(next);
+    };
+    // Browser-native cross-fade when supported. Falls back to the standard
+    // CSS transitions on :root/body/card defined in globals.css.
+    const doc = document as Document & {
+      startViewTransition?: (cb: () => void) => unknown;
+    };
+    if (typeof doc.startViewTransition === 'function' && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      doc.startViewTransition(commit);
+    } else {
+      commit();
+    }
   }
 
   if (!mounted) return <span className="w-8 h-8" aria-hidden />;

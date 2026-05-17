@@ -95,7 +95,10 @@ export function BulkActionBar({ visibleCount }: BulkActionBarProps) {
   }
 
   return (
-    <div className="px-4 py-3 border-b border-[var(--color-hairline)] bg-[var(--color-surface)]">
+    <div
+      className="px-4 py-3 border-b border-[var(--color-hairline)] bg-[var(--color-surface)]"
+      style={{ animation: 'row-in var(--dur-medium) var(--ease-spring-gentle) both' }}
+    >
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2 text-[12px]">
           <span className="font-semibold text-[var(--color-text-primary)]">{count} selected</span>

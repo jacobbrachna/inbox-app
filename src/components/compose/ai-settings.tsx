@@ -62,37 +62,11 @@ export function AiSettings() {
     }
   }
 
-  const [extractState, setExtractState] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
-  const [extractMsg, setExtractMsg] = useState('');
-
-  async function extractFromHeadlines() {
-    setExtractState('running');
-    setExtractMsg('Reading headlines…');
-    try {
-      const r = await fetch('/api/ai/extract-headlines', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      });
-      if (!r.ok) {
-        const err = await r.json().catch(() => ({}));
-        throw new Error(err.error ?? `HTTP ${r.status}`);
-      }
-      const data = await r.json();
-      setExtractState('done');
-      setExtractMsg(`Extracted from ${data.processed} / ${data.candidates} headlines.`);
-      setTimeout(() => { setExtractState('idle'); setExtractMsg(''); }, 6000);
-    } catch (e) {
-      setExtractState('error');
-      setExtractMsg(e instanceof Error ? e.message : 'Failed');
-    }
-  }
-
   async function classifyAll() {
     setClassifyState('running');
     setClassifyMsg('Finding unclassified conversations…');
     try {
-      // Fetch all conv IDs that lack an aiCategory
+      // Fetch all conv IDs that haven't been AI-classified yet
       const r = await fetch('/api/conversations/unclassified');
       const { ids } = (await r.json()) as { ids: string[] };
       if (!ids.length) {
@@ -237,45 +211,6 @@ export function AiSettings() {
               classifyState === 'running' && 'text-[var(--color-text-tertiary)]',
             )}>
               {classifyMsg}
-            </span>
-          )}
-        </div>
-      </div>
-
-      {/* Extract company/role from headlines */}
-      <div className="border-t border-[var(--color-hairline)] pt-4 mt-2">
-        <div className="mb-2">
-          <p className="text-[13px] font-semibold text-[var(--color-text-primary)] flex items-center gap-2">
-            <Sparkles className="w-3.5 h-3.5 text-[var(--color-accent)]" />
-            Extract company &amp; role from headlines
-          </p>
-          <p className="text-[11.5px] text-[var(--color-text-tertiary)]">
-            Reads the headline we already have for every contact (&ldquo;Director at Acme&rdquo;) and pulls
-            out clean company / role / location. Doesn&rsquo;t touch LinkedIn — uses what we already synced. Refines automatically when you visit a profile.
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={extractFromHeadlines}
-            disabled={!hasKey || extractState === 'running'}
-            className={cn(
-              'px-3 py-1.5 text-[12px] font-semibold rounded-md',
-              !hasKey
-                ? 'bg-[var(--color-surface-2)] text-[var(--color-text-muted)] cursor-not-allowed'
-                : 'bg-[var(--color-accent-deep)] hover:bg-[var(--color-accent)] text-white disabled:opacity-50',
-            )}
-            style={{ transition: 'all 140ms var(--ease-out-quart)' }}
-          >
-            {extractState === 'running' ? 'Extracting…' : 'Extract from headlines'}
-          </button>
-          {extractMsg && (
-            <span className={cn(
-              'text-[11px]',
-              extractState === 'error' && 'text-[var(--color-danger)]',
-              extractState === 'done' && 'text-[var(--color-success)]',
-              extractState === 'running' && 'text-[var(--color-text-tertiary)]',
-            )}>
-              {extractMsg}
             </span>
           )}
         </div>

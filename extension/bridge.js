@@ -57,6 +57,27 @@ window.addEventListener('message', (ev) => {
       },
     );
   }
+  // New-thread composer (LinkedIn DM or Sales Nav InMail) — routes the
+  // request from new-thread-modal.tsx through to background.js.
+  if (ev.data.type === 'inboxpro-new-thread-request') {
+    chrome.runtime.sendMessage(
+      {
+        action: 'createNewThread',
+        channel: ev.data.channel,
+        recipientUrn: ev.data.recipientUrn,
+        recipientName: ev.data.recipientName,
+        subject: ev.data.subject,
+        body: ev.data.body,
+      },
+      (response) => {
+        window.postMessage({
+          type: 'inboxpro-new-thread-result',
+          requestId: ev.data.requestId,
+          response,
+        }, '*');
+      },
+    );
+  }
   if (ev.data.type === 'inboxpro-li-api-debug') {
     chrome.runtime.sendMessage({ action: 'liApiDebugDump' }, (response) => {
       window.postMessage({ type: 'inboxpro-li-api-debug-result', response }, '*');

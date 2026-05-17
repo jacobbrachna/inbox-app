@@ -2,15 +2,166 @@
 import { useState, useEffect, useRef } from 'react';
 import {
   Send, Star, Clock, Archive, ArchiveRestore, Tag, ExternalLink, Download, Trash2, Sparkles,
-  MessageSquare, X, Check, AlertCircle, BellRing, StickyNote, ChevronDown, ChevronRight,
+  MessageSquare, X, Check, AlertCircle, BellRing, StickyNote, ChevronDown, ChevronRight, Calendar,
+  Pencil, ThumbsDown,
 } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { hueForName } from '@/lib/color-for-name';
+import { isExtensionReady } from '@/lib/use-extension-ready';
 import { useStore } from '@/store';
 import { Avatar } from '@/components/shared/avatar';
 import { Badge } from '@/components/shared/badge';
 import type { Message } from '@/types';
 import { format, formatDistanceToNowStrict } from 'date-fns';
+
+// Follow-up banner — shown at the top of the thread when a follow-up is set.
+// AI-detected follow-ups show with a Sparkles tag + the phrase that triggered
+// detection. Manual ones show just the date. Both have inline date editing
+// and a dismiss button.
+function FollowUpBanner({
+  conversationId,
+  followUpAt,
+  followUpReason,
+  followUpSource,
+  followUpConfidence,
+  onUpdate,
+}: {
+  conversationId: string;
+  followUpAt: string;
+  followUpReason: string | null | undefined;
+  followUpSource: 'manual' | 'ai' | null | undefined;
+  followUpConfidence: 'high' | 'low' | null | undefined;
+  onUpdate: (id: string, patch: { followUpAt?: string | null; followUpSource?: 'manual' | 'ai' | null }) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const date = new Date(followUpAt);
+  const dueMs = date.getTime();
+  const now = Date.now();
+  const daysFromNow = Math.round((dueMs - now) / (24 * 60 * 60 * 1000));
+
+  const overdue = dueMs < now;
+  const isAI = followUpSource === 'ai';
+  const isLowConfidence = followUpConfidence === 'low';
+
+  const dueLabel = overdue
+    ? `${Math.abs(daysFromNow)}d overdue`
+    : daysFromNow === 0
+    ? 'Due today'
+    : daysFromNow === 1
+    ? 'Due tomorrow'
+    : `Due in ${daysFromNow} days`;
+
+  return (
+    <div
+      className={cn(
+        'mx-6 mt-4 px-4 py-3 rounded-lg border flex items-start gap-3',
+        overdue
+          ? 'bg-[var(--color-danger)]/10 border-[var(--color-danger)]/30'
+          : 'bg-[var(--color-accent-soft)] border-[var(--color-accent)]/30',
+      )}
+    >
+      <div className="flex-shrink-0 mt-0.5">
+        {isAI ? (
+          <Sparkles className="w-4 h-4 text-[var(--color-accent)]" />
+        ) : (
+          <BellRing className="w-4 h-4 text-[var(--color-accent)]" />
+        )}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-baseline gap-2 flex-wrap">
+          <span className="text-[12.5px] font-semibold text-[var(--color-text-primary)]">
+            Follow up {format(date, 'MMM d')}
+          </span>
+          <span
+            className={cn(
+              'mono text-[10.5px] tabular-nums px-1.5 py-0.5 rounded font-medium',
+              overdue
+                ? 'bg-[var(--color-danger)]/20 text-[var(--color-danger)]'
+                : 'bg-[var(--color-accent)]/15 text-[var(--color-accent-fg)]',
+            )}
+          >
+            {dueLabel}
+          </span>
+          {isAI && (
+            <span className="text-[10px] uppercase tracking-wide font-semibold text-[var(--color-accent)]">
+              AI{isLowConfidence ? ' · low confidence' : ''}
+            </span>
+          )}
+        </div>
+        {followUpReason && (
+          <p className="text-[11.5px] text-[var(--color-text-secondary)] mt-1 italic">
+            &ldquo;{followUpReason}&rdquo;
+          </p>
+        )}
+        {editing && (
+          <div className="mt-2 flex items-center gap-2">
+            <input
+              type="date"
+              defaultValue={format(date, 'yyyy-MM-dd')}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (!v) return;
+                const d = new Date(v);
+                d.setHours(12, 0, 0, 0);
+                onUpdate(conversationId, { followUpAt: d.toISOString(), followUpSource: 'manual' });
+                setEditing(false);
+              }}
+              className="text-[11px] px-2 py-1 rounded border border-[var(--color-hairline)] bg-[var(--color-card)] text-[var(--color-text-primary)]"
+            />
+            <button
+              onClick={() => setEditing(false)}
+              className="text-[11px] text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+      </div>
+      <div className="flex-shrink-0 flex items-center gap-1">
+        {!editing && (
+          <button
+            onClick={() => setEditing(true)}
+            className="inline-flex items-center justify-center w-7 h-7 rounded-md text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-card-hover)]"
+            title="Change date"
+            style={{ transition: 'all 140ms var(--ease-out-quart)' }}
+          >
+            <Calendar className="w-3.5 h-3.5" />
+          </button>
+        )}
+        {isAI ? (
+          <button
+            onClick={async () => {
+              // Record feedback + clear in one call so future classify
+              // runs avoid re-triggering on similar phrasing.
+              try {
+                await fetch('/api/follow-ups/dismiss', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ conversationId, phrase: followUpReason, kind: followUpConfidence === 'low' ? 'soft' : 'commitment' }),
+                });
+              } catch {}
+              onUpdate(conversationId, { followUpAt: null, followUpSource: null });
+            }}
+            className="inline-flex items-center gap-1 px-2 h-7 rounded-md text-[10.5px] font-semibold text-[var(--color-text-tertiary)] hover:text-[var(--color-danger)] hover:bg-[var(--color-card-hover)]"
+            title="Wrong follow-up — clear and tell AI not to trigger on similar phrasing"
+            style={{ transition: 'all 140ms var(--ease-out-quart)' }}
+          >
+            <ThumbsDown className="w-3.5 h-3.5" /> Wrong
+          </button>
+        ) : (
+          <button
+            onClick={() => onUpdate(conversationId, { followUpAt: null })}
+            className="inline-flex items-center justify-center w-7 h-7 rounded-md text-[var(--color-text-tertiary)] hover:text-[var(--color-danger)] hover:bg-[var(--color-card-hover)]"
+            title="Dismiss follow-up"
+            style={{ transition: 'all 140ms var(--ease-out-quart)' }}
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
 
 // Date divider — "Today", "Yesterday", or "Mar 4, 2026". Hairline on either
 // side with a centered pill. Refined, minimal, doesn't shout.
@@ -48,7 +199,7 @@ function MessageBubble({
 }) {
   const isMe = message.isFromMe;
   return (
-    <div className={cn('flex gap-3 mb-4', isMe && 'flex-row-reverse')}>
+    <div className={cn('row-in flex gap-3 mb-4', isMe && 'flex-row-reverse')}>
       {!isMe && (
         <Avatar
           name={message.senderName}
@@ -358,9 +509,16 @@ function LabelPicker({ conversationId, onClose }: { conversationId: string; onCl
 }
 
 export function MessageThread() {
-  const { activeConversationId, conversations, messages, setMessages, loadMessages, auth, updateConversation, deleteConversation, labels, snippets } = useStore();
+  const { activeConversationId, conversations, messages, setMessages, loadMessages, auth, updateConversation, deleteConversation, labels, snippets, setActiveConversationId, setActiveFilter, loadFromServer } = useStore();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [replyText, setReplyText] = useState('');
+  // Draft-mode state — recipient typeahead, channel pick, subject (SN-only).
+  // Lives inline in MessageThread so the existing AI Drafts / Improve /
+  // Snippets / right-sidebar / etc. all just work.
+  type ContactHit = { id: string; name: string; headline: string | null; company: string | null; role: string | null; avatarUrl: string | null; linkedinUrn: string | null; profileSlug: string | null; profileUrl: string | null };
+  const [recipientQuery, setRecipientQuery] = useState('');
+  const [recipientResults, setRecipientResults] = useState<ContactHit[]>([]);
+  const [draftChannel, setDraftChannel] = useState<'linkedin' | 'sn' | null>(null);
   const [sending, setSending] = useState(false);
   const [sentFlash, setSentFlash] = useState(false);
   const [loading] = useState(false);
@@ -374,12 +532,20 @@ export function MessageThread() {
   const [drafts, setDrafts] = useState<string[]>([]);
   const [draftsLoading, setDraftsLoading] = useState(false);
   const [draftsError, setDraftsError] = useState<string | null>(null);
+  const [draftsContextUsed, setDraftsContextUsed] = useState<string[]>([]);
+  const [draftsExtraContext, setDraftsExtraContext] = useState('');
+  const [showDraftsContextInput, setShowDraftsContextInput] = useState(false);
+  const [draftsReadiness, setDraftsReadiness] = useState<'thin' | 'some' | 'strong' | null>(null);
   const [showImprove, setShowImprove] = useState(false);
   const [improveLoading, setImproveLoading] = useState(false);
   const [improveError, setImproveError] = useState<string | null>(null);
   const [improveSuggestions, setImproveSuggestions] = useState<string[]>([]);
   const [improveImproved, setImproveImproved] = useState<string | null>(null);
   const [improveBaseline, setImproveBaseline] = useState<{ replyRate: number; sent: number } | null>(null);
+  const [composeFocused, setComposeFocused] = useState(false);
+  // Briefly flash the textarea when a snippet shortcut auto-expands so the
+  // user sees the insertion register.
+  const [snippetFlashKey, setSnippetFlashKey] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // Debounce typing fires to ~3s — LinkedIn shows the indicator for ~5s after
@@ -389,6 +555,9 @@ export function MessageThread() {
     const now = Date.now();
     if (now - lastTypingAtRef.current < 3_000) return;
     if (!activeConversationId) return;
+    // No typing pings for drafts — there's no real LinkedIn conversation
+    // yet and the placeholder ID isn't valid for the typing API.
+    if (activeConversationId.startsWith('draft:')) return;
     lastTypingAtRef.current = now;
     window.postMessage(
       { type: 'inboxpro-typing', conversationUrn: activeConversationId },
@@ -400,6 +569,128 @@ export function MessageThread() {
   const threadMessages = activeConversationId ? (messages[activeConversationId] ?? []) : [];
   const primary = convo?.participants[0];
   const convoLabels = labels.filter((l) => convo?.labels.includes(l.id));
+  const isDraft = convo?.status === 'draft';
+  // Hydrate draft channel from conversation.source on first render so a
+  // previously-chosen channel persists across navigation. SN convs map to
+  // 'sn'; everything else defaults to null (user must pick).
+  useEffect(() => {
+    if (!convo || convo.status !== 'draft') return;
+    if (draftChannel !== null) return;
+    if (convo.source === 'sales_nav') setDraftChannel('sn');
+    else if (convo.source === 'linkedin' && primary) setDraftChannel('linkedin');
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [convo?.id, convo?.status]);
+  // Recipient typeahead — debounced search against /api/contacts/search.
+  // Only fires when in draft mode AND no recipient picked yet.
+  useEffect(() => {
+    if (!isDraft || primary) return;
+    const q = recipientQuery.trim();
+    if (q.length < 2) { setRecipientResults([]); return; }
+    const t = setTimeout(async () => {
+      try {
+        const ch = draftChannel ?? 'linkedin';
+        const r = await fetch(`/api/contacts/search?q=${encodeURIComponent(q)}&channel=${ch}`);
+        const d = await r.json();
+        setRecipientResults(d.contacts ?? []);
+      } catch { setRecipientResults([]); }
+    }, 200);
+    return () => clearTimeout(t);
+  }, [isDraft, primary, recipientQuery, draftChannel]);
+  // Reset draft-mode state when switching conversations so we don't bleed
+  // recipient/channel from one draft into another (or into a real conv).
+  // Also clear AI Drafts ad-hoc context — it's per-thread.
+  useEffect(() => {
+    setRecipientQuery('');
+    setRecipientResults([]);
+    setDraftChannel(null);
+    setDraftsExtraContext('');
+    setShowDraftsContextInput(false);
+  }, [activeConversationId]);
+
+  // When user picks a recipient from typeahead, first check if they
+  // already have an existing thread with this person on the chosen channel.
+  // If yes, redirect to the existing thread + discard the empty draft
+  // (LinkedIn's own behavior — no duplicate threads).
+  async function pickRecipient(c: ContactHit) {
+    if (!convo) return;
+    const participant = {
+      id: c.linkedinUrn ?? '',
+      name: c.name,
+      headline: c.headline ?? undefined,
+      avatarUrl: c.avatarUrl ?? undefined,
+      profileUrl: c.profileUrl ?? undefined,
+      company: c.company ?? undefined,
+    };
+    setRecipientQuery('');
+    setRecipientResults([]);
+
+    // Existing-thread check — only run if a channel is set. Without channel
+    // we can't know which inbox to look in. If user hasn't picked one yet,
+    // proceed with normal draft persistence and they can change later.
+    if (c.linkedinUrn && draftChannel) {
+      const source = draftChannel === 'sn' ? 'sales_nav' : 'linkedin';
+      try {
+        const r = await fetch(`/api/conversations/find-by-recipient?urn=${encodeURIComponent(c.linkedinUrn)}&source=${source}`);
+        const d = await r.json();
+        if (d?.conversation?.id) {
+          // Redirect to the existing thread, discard the empty draft.
+          const draftId = convo.id;
+          setActiveConversationId(d.conversation.id);
+          setActiveFilter('all');
+          requestAnimationFrame(() => { try { deleteConversation(draftId); } catch {} });
+          return;
+        }
+      } catch {
+        // Find-by-recipient is best-effort. On failure, proceed with the
+        // normal draft path — duplicate detection just doesn't fire.
+      }
+    }
+
+    updateConversation(convo.id, { participants: [participant] });
+  }
+  function clearRecipient() {
+    if (!convo) return;
+    updateConversation(convo.id, { participants: [] });
+  }
+  async function setChannel(ch: 'linkedin' | 'sn') {
+    setDraftChannel(ch);
+    if (!convo) return;
+    const source = ch === 'sn' ? 'sales_nav' : 'linkedin';
+    updateConversation(convo.id, { source });
+
+    // If recipient is already picked and we now know the channel, repeat
+    // the existing-thread check — redirect if a thread already exists.
+    const urn = primary?.id;
+    if (urn) {
+      try {
+        const r = await fetch(`/api/conversations/find-by-recipient?urn=${encodeURIComponent(urn)}&source=${source}`);
+        const d = await r.json();
+        if (d?.conversation?.id) {
+          const draftId = convo.id;
+          setActiveConversationId(d.conversation.id);
+          setActiveFilter('all');
+          requestAnimationFrame(() => { try { deleteConversation(draftId); } catch {} });
+        }
+      } catch {}
+    }
+  }
+  function discardDraft() {
+    if (!convo) return;
+    if (!confirm('Discard this draft? This can\'t be undone.')) return;
+    // Order matters: drop active selection FIRST so the right-column
+    // doesn't render a half-deleted conv mid-flight. Then delete (which
+    // also clears active in the store, but redundant is fine). Filter
+    // change comes last so the user lands on Drafts cleanly.
+    const id = convo.id;
+    setActiveConversationId(null);
+    setActiveFilter('drafts');
+    // requestAnimationFrame defers the store mutation by one paint so
+    // React commits the active=null render before the conversations array
+    // mutates. Removes a class of stale-reference crashes.
+    requestAnimationFrame(() => {
+      try { deleteConversation(id); } catch {}
+    });
+  }
 
   // Load messages from the DB whenever the active conversation changes.
   useEffect(() => {
@@ -409,11 +700,25 @@ export function MessageThread() {
   // Bridge poll (10s) keeps DB current. No per-thread refresh on open —
   // that was triggering writes that overwrote good participant data.
 
-  // Mark conversation as read when opened (don't wipe messages)
+  // Mark conversation as read when opened (don't wipe messages).
+  // Skip drafts — overwriting status='draft' with 'read' would silently
+  // promote the draft to a real thread before the user clicks Send.
+  //
+  // CRITICAL: `conversations` is NOT in deps even though we read from it.
+  // updateConversation creates a new array reference on every call, so
+  // including it would cause an infinite loop (effect fires → update →
+  // new array → effect fires → ...). We read the latest array via a ref.
+  const conversationsRef = useRef(conversations);
+  conversationsRef.current = conversations;
   useEffect(() => {
-    if (activeConversationId) {
-      updateConversation(activeConversationId, { status: 'read', unreadCount: 0 });
-    }
+    if (!activeConversationId) return;
+    const c = conversationsRef.current.find((x) => x.id === activeConversationId);
+    if (!c) return;
+    if (c.status === 'draft') return;
+    // Idempotency guard — skip if already in the target state. Belt-and-
+    // suspenders against the same loop class.
+    if (c.status === 'read' && (c.unreadCount ?? 0) === 0) return;
+    updateConversation(activeConversationId, { status: 'read', unreadCount: 0 });
   }, [activeConversationId, updateConversation]);
 
   useEffect(() => {
@@ -430,7 +735,12 @@ export function MessageThread() {
       const r = await fetch('/api/ai/draft-reply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conversationId: activeConversationId }),
+        body: JSON.stringify({
+          conversationId: activeConversationId,
+          // Free-form context the user typed into the "Add context" box.
+          // Empty string is fine; server treats as absent.
+          extraContext: draftsExtraContext.trim() || undefined,
+        }),
       });
       if (!r.ok) {
         const err = await r.json().catch(() => ({}));
@@ -444,6 +754,8 @@ export function MessageThread() {
       }
       const data = await r.json();
       setDrafts(Array.isArray(data.drafts) ? data.drafts : []);
+      setDraftsContextUsed(Array.isArray(data.contextUsed) ? data.contextUsed : []);
+      setDraftsReadiness(data.readiness ?? null);
     } catch (e) {
       setDraftsError(e instanceof Error ? e.message : 'Failed');
     } finally {
@@ -489,10 +801,66 @@ export function MessageThread() {
 
   async function handleSend() {
     if (!replyText.trim() || !activeConversationId) return;
-    if (!document.getElementById('inboxpro-bridge-marker')) {
+    if (!isExtensionReady()) {
       setSendError('InboxPro extension not detected. Reload extension and refresh.');
       return;
     }
+
+    // Draft-mode send: spins up a NEW LinkedIn DM or SN InMail thread via
+    // the createNewThread extension action. Different validation, different
+    // optimistic-update strategy (delete draft on success, let sync pull
+    // the real conversation).
+    if (isDraft) {
+      if (!primary) { setSendError('Pick a recipient first.'); return; }
+      if (!primary.id) { setSendError('Recipient has no LinkedIn URN. Visit their profile once to capture it.'); return; }
+      if (!draftChannel) { setSendError('Pick a channel (LinkedIn DM or Sales Nav).'); return; }
+      setSending(true);
+      setSendError(null);
+      const body = replyText.trim();
+      const draftId = activeConversationId;
+      const requestId = `new-thread-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const onResult = (ev: MessageEvent) => {
+        if (ev.source !== window || !ev.data) return;
+        if (ev.data.type !== 'inboxpro-new-thread-result' || ev.data.requestId !== requestId) return;
+        window.removeEventListener('message', onResult);
+        const r = ev.data.response;
+        if (r?.ok) {
+          (async () => {
+            await deleteConversation(draftId);
+            await loadFromServer();
+            setActiveConversationId(null);
+            setActiveFilter('all');
+            setSending(false);
+            setSentFlash(true);
+            setTimeout(() => setSentFlash(false), 1200);
+          })();
+        } else {
+          setSending(false);
+          setSendError(r?.reason || 'Send failed.');
+        }
+      };
+      window.addEventListener('message', onResult);
+      window.postMessage({
+        type: 'inboxpro-new-thread-request',
+        requestId,
+        channel: draftChannel,
+        recipientUrn: primary.id,
+        recipientName: primary.name,
+        // Subject intentionally omitted — InboxPro targets messaging
+        // existing connections, where LinkedIn doesn't require one.
+        subject: null,
+        body,
+      }, '*');
+      setTimeout(() => {
+        window.removeEventListener('message', onResult);
+        setSending((s) => {
+          if (s) setSendError('Send timed out. Check the extension.');
+          return false;
+        });
+      }, 30_000);
+      return;
+    }
+
     setSending(true);
     setSendError(null);
 
@@ -550,6 +918,12 @@ export function MessageThread() {
     }, 20_000);
   }
 
+  function flashSnippet() {
+    // Bump the key — re-keys the textarea so the snippet-flash class
+    // animation re-fires. Cleared by React when animation finishes.
+    setSnippetFlashKey((k) => k + 1);
+  }
+
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
@@ -561,6 +935,7 @@ export function MessageThread() {
       const snippet = snippets.find((s) => text.endsWith(s.shortcut));
       if (snippet) {
         setReplyText(text.slice(0, -snippet.shortcut.length) + snippet.body);
+        flashSnippet();
         e.preventDefault();
       }
     }
@@ -569,6 +944,7 @@ export function MessageThread() {
   function applySnippet(body: string) {
     setReplyText(body);
     setShowSnippets(false);
+    flashSnippet();
     textareaRef.current?.focus();
   }
 
@@ -586,45 +962,99 @@ export function MessageThread() {
     );
   }
 
+
   return (
     <div className="@container/mt card flex-1 flex flex-col h-full min-w-[320px] relative overflow-hidden">
       {/* Header — wraps action icons to a second row when the thread column
           is narrower than 640px (container query, not viewport). */}
       <div className="px-6 py-4 border-b border-[var(--color-hairline)] flex items-center gap-4 flex-shrink-0 @max-[640px]/mt:flex-wrap">
-        <div
-          className={cn(
-            'w-10 h-10 rounded-[10px] overflow-hidden flex items-center justify-center flex-shrink-0',
-            primary?.avatarUrl ? 'bg-[var(--color-surface-2)]' : 'monogram-tile',
-          )}
-          style={primary?.avatarUrl ? undefined : { ['--mono-hue' as string]: hueForName(primary?.name) }}
-        >
-          {primary?.avatarUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={primary.avatarUrl} alt={primary?.name ?? ''} className="w-full h-full object-cover" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
-          ) : (
-            <span className="text-[12px] font-semibold">
-              {(primary?.name ?? '?').split(/\s+/).map((p) => p[0]).join('').slice(0, 2).toUpperCase()}
-            </span>
-          )}
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 min-w-0">
-            <h3 className="text-[15px] font-semibold tracking-tight text-[var(--color-text-primary)] truncate min-w-0">{primary?.name}</h3>
-            {convo.source === 'sales_nav' && (
-              <span className="eyebrow text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--color-surface-2)] text-[var(--color-text-secondary)] flex-shrink-0">Sales Nav</span>
+        {isDraft && !primary ? (
+          // Empty-draft state: avoid the awkward "?" monogram. A pencil
+          // tile reads as "you're composing" rather than "unknown contact".
+          <div className="w-10 h-10 rounded-[10px] flex items-center justify-center flex-shrink-0 bg-[var(--color-accent-soft)] text-[var(--color-accent-fg)]">
+            <Pencil className="w-4 h-4" />
+          </div>
+        ) : (
+          <div
+            className={cn(
+              'w-10 h-10 rounded-[10px] overflow-hidden flex items-center justify-center flex-shrink-0',
+              primary?.avatarUrl ? 'bg-[var(--color-surface-2)]' : 'monogram-tile',
+            )}
+            style={primary?.avatarUrl ? undefined : { ['--mono-hue' as string]: hueForName(primary?.name) }}
+          >
+            {primary?.avatarUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={primary.avatarUrl} alt={primary?.name ?? ''} className="w-full h-full object-cover" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
+            ) : (
+              <span className="text-[12px] font-semibold">
+                {(primary?.name ?? '?').split(/\s+/).map((p) => p[0]).join('').slice(0, 2).toUpperCase()}
+              </span>
             )}
           </div>
-          {primary?.headline && (
-            <p className="text-[12px] text-[var(--color-text-tertiary)] truncate">{primary.headline}</p>
-          )}
-          {convoLabels.length > 0 && (
-            <div className="flex gap-1 mt-1 overflow-hidden">
-              {convoLabels.map((l) => <Badge key={l.id} label={l.name} color={l.color} />)}
+        )}
+        <div className="flex-1 min-w-0 relative">
+          {isDraft && !primary ? (
+            // Recipient picker (draft, no recipient yet) — inline in the
+            // header so the page layout stays identical to a real conversation.
+            <>
+              <h3 className="text-[15px] font-semibold tracking-tight text-[var(--color-text-primary)]">New message</h3>
+              <input
+                type="text"
+                value={recipientQuery}
+                onChange={(e) => setRecipientQuery(e.target.value)}
+                placeholder="Type a name to find a recipient…"
+                className="w-full bg-transparent border-0 outline-none text-[12px] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-tertiary)] placeholder:font-normal font-normal p-0 mt-0.5"
+                autoFocus
+              />
+              {recipientResults.length > 0 && (
+                <div className="popover-in absolute top-full left-0 right-0 mt-1.5 bg-[var(--color-card)] border border-[var(--color-hairline)] rounded-lg z-40 max-h-[280px] overflow-y-auto" style={{ boxShadow: 'var(--shadow-raised)', transformOrigin: 'top left' }}>
+                  {recipientResults.map((c) => (
+                    <button
+                      key={c.id}
+                      onClick={() => pickRecipient(c)}
+                      className="w-full text-left px-3 py-2 hover:bg-[var(--color-card-hover)] border-b border-[var(--color-hairline)] last:border-0 flex items-center gap-2.5"
+                    >
+                      <div className="w-7 h-7 rounded-full bg-[var(--color-accent-soft)] flex items-center justify-center text-[11px] font-semibold text-[var(--color-accent-fg)] flex-shrink-0">{c.name.slice(0, 1)}</div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[12.5px] font-medium text-[var(--color-text-primary)] truncate">{c.name}</div>
+                        <div className="text-[11px] text-[var(--color-text-tertiary)] truncate">
+                          {c.role ? `${c.role}${c.company ? ` at ${c.company}` : ''}` : (c.headline || '—')}
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </>
+          ) : (
+            <div className={cn('contents', isDraft && 'row-in')}>
+              <div className="flex items-center gap-2 min-w-0">
+                <h3 className="text-[15px] font-semibold tracking-tight text-[var(--color-text-primary)] truncate min-w-0">{primary?.name}</h3>
+                {isDraft && (
+                  <span className="eyebrow text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--color-accent-soft)] text-[var(--color-accent-fg)] flex-shrink-0">Draft</span>
+                )}
+                {!isDraft && convo.source === 'sales_nav' && (
+                  <span className="eyebrow text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--color-surface-2)] text-[var(--color-text-secondary)] flex-shrink-0">Sales Nav</span>
+                )}
+                {isDraft && (
+                  <button onClick={clearRecipient} className="text-[10.5px] text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] underline-offset-2 hover:underline">Change</button>
+                )}
+              </div>
+              {primary?.headline && (
+                <p className="text-[12px] text-[var(--color-text-tertiary)] truncate">{primary.headline}</p>
+              )}
+              {convoLabels.length > 0 && (
+                <div className="flex gap-1 mt-1 overflow-hidden">
+                  {convoLabels.map((l) => <Badge key={l.id} label={l.name} color={l.color} />)}
+                </div>
+              )}
             </div>
           )}
         </div>
 
-        {/* Actions — slip below the name row at narrow container widths */}
+        {/* Actions — slip below the name row at narrow container widths.
+            Draft mode strips most actions (no thread to star/snooze/label/
+            archive yet) and repurposes Delete as Discard. */}
         <div className="flex items-center gap-0.5 flex-shrink-0 @max-[640px]/mt:w-full @max-[640px]/mt:basis-full @max-[640px]/mt:justify-end @max-[640px]/mt:pl-14 @max-[640px]/mt:-mt-1">
           {primary?.profileUrl && (
             <a
@@ -638,6 +1068,17 @@ export function MessageThread() {
               <ExternalLink className="w-3.5 h-3.5" />
             </a>
           )}
+          {isDraft ? (
+            <button
+              onClick={discardDraft}
+              className="inline-flex items-center justify-center w-8 h-8 rounded-full text-[var(--color-text-tertiary)] hover:text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10"
+              style={{ transition: 'all 160ms var(--ease-out-quart)' }}
+              title="Discard draft"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          ) : (
+          <>
           <a
             href={`/api/export?format=md&conversationId=${encodeURIComponent(convo.id)}`}
             className="inline-flex items-center justify-center w-8 h-8 rounded-full text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-2)]"
@@ -741,13 +1182,15 @@ export function MessageThread() {
           >
             <Trash2 className="w-3.5 h-3.5" />
           </button>
+          </>
+          )}
         </div>
       </div>
 
       {confirmDelete && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm rounded-[var(--radius-card)]">
+        <div className="backdrop-in absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm rounded-[var(--radius-card)]">
           <div
-            className="bg-[var(--color-card)] border border-[var(--color-hairline)] rounded-2xl p-6 w-96"
+            className="modal-in bg-[var(--color-card)] border border-[var(--color-hairline)] rounded-2xl p-6 w-96"
             style={{ boxShadow: 'var(--shadow-raised)' }}
           >
             <h3 className="text-[16px] font-semibold text-[var(--color-text-primary)] mb-2">Delete conversation?</h3>
@@ -780,12 +1223,22 @@ export function MessageThread() {
       {/* Notes panel — collapsible */}
       <NotesPanel conversationId={convo.id} initialNotes={convo.notes ?? ''} />
 
+      {convo?.followUpAt && (
+        <FollowUpBanner
+          conversationId={convo.id}
+          followUpAt={convo.followUpAt}
+          followUpReason={convo.followUpReason}
+          followUpSource={convo.followUpSource}
+          followUpConfidence={convo.followUpConfidence}
+          onUpdate={updateConversation}
+        />
+      )}
+
       {/* Messages — keyed by conv id so switching threads triggers a fresh
-          fade-in via the `thread-fade` keyframe. */}
+          fade-in via the `thread-fade` keyframe (defined in globals.css). */}
       <div
         key={activeConversationId ?? 'empty'}
-        className="flex-1 overflow-y-auto px-6 py-6"
-        style={{ animation: 'thread-fade 160ms var(--ease-out-quart) both' }}
+        className="thread-fade flex-1 overflow-y-auto px-6 py-6"
       >
         {loading && (
           <div className="flex items-center justify-center py-12">
@@ -828,7 +1281,10 @@ export function MessageThread() {
       {/* Reply box */}
       <div className="px-6 py-4 border-t border-[var(--color-hairline)] flex-shrink-0">
         {sendError && (
-          <div className="text-[11px] text-[var(--color-danger)] mb-2 flex items-center gap-1">
+          <div
+            key={sendError}
+            className="text-[11px] text-[var(--color-danger)] mb-2 flex items-center gap-1 shake"
+          >
             <AlertCircle className="w-3.5 h-3.5" /> {sendError}
           </div>
         )}
@@ -839,8 +1295,8 @@ export function MessageThread() {
           {/* Snippet picker */}
           {showSnippets && (
             <div
-              className="absolute bottom-full left-0 mb-2 w-72 bg-[var(--color-card)] border border-[var(--color-hairline)] rounded-xl py-1 z-50 overflow-hidden"
-              style={{ boxShadow: 'var(--shadow-raised)' }}
+              className="popover-in absolute bottom-full left-0 mb-2 w-72 bg-[var(--color-card)] border border-[var(--color-hairline)] rounded-xl py-1 z-50 overflow-hidden"
+              style={{ boxShadow: 'var(--shadow-raised)', transformOrigin: 'bottom left' }}
             >
               <p className="eyebrow px-4 py-2">Snippets</p>
               {snippets.map((s) => (
@@ -860,8 +1316,8 @@ export function MessageThread() {
           {/* Improve popover — Claude critiques the current draft */}
           {showImprove && (
             <div
-              className="absolute bottom-full left-0 mb-2 w-[460px] bg-[var(--color-card)] border border-[var(--color-hairline)] rounded-xl py-1 z-50 overflow-hidden"
-              style={{ boxShadow: 'var(--shadow-raised)' }}
+              className="popover-in absolute bottom-full left-0 mb-2 w-[460px] bg-[var(--color-card)] border border-[var(--color-hairline)] rounded-xl py-1 z-50 overflow-hidden"
+              style={{ boxShadow: 'var(--shadow-raised)', transformOrigin: 'bottom left' }}
             >
               <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--color-hairline)]">
                 <span className="eyebrow flex items-center gap-1.5">
@@ -926,21 +1382,69 @@ export function MessageThread() {
           {/* Draft picker — popover shows 3 AI-generated drafts */}
           {showDrafts && (
             <div
-              className="absolute bottom-full left-0 mb-2 w-[420px] bg-[var(--color-card)] border border-[var(--color-hairline)] rounded-xl py-1 z-50 overflow-hidden"
-              style={{ boxShadow: 'var(--shadow-raised)' }}
+              className="popover-in absolute bottom-full left-0 mb-2 w-[420px] bg-[var(--color-card)] border border-[var(--color-hairline)] rounded-xl py-1 z-50 overflow-hidden"
+              style={{ boxShadow: 'var(--shadow-raised)', transformOrigin: 'bottom left' }}
             >
               <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--color-hairline)]">
                 <span className="eyebrow flex items-center gap-1.5">
                   <Sparkles className="w-3 h-3 text-[var(--color-accent)]" /> AI Drafts
                 </span>
-                <button
-                  onClick={() => setShowDrafts(false)}
-                  className="text-[11px] text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]"
-                  style={{ transition: 'color 140ms var(--ease-out-quart)' }}
-                >
-                  Close
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setShowDraftsContextInput((v) => !v)}
+                    className={cn(
+                      'press-feedback text-[11px] font-semibold inline-flex items-center gap-1 px-2 py-1 rounded-md',
+                      showDraftsContextInput
+                        ? 'bg-[var(--color-accent)] text-white'
+                        : 'bg-[var(--color-accent-soft)] text-[var(--color-accent-fg)] hover:bg-[rgb(var(--color-accent-rgb)/0.22)]',
+                    )}
+                    style={{ transition: 'all 140ms var(--ease-out-quart)' }}
+                    title="Add ad-hoc context for this draft (e.g. 'met in June', 'meeting already booked')"
+                  >
+                    <Sparkles className="w-3 h-3" />
+                    {showDraftsContextInput ? 'Context open' : 'Add context'}
+                  </button>
+                  <button
+                    onClick={() => setShowDrafts(false)}
+                    className="text-[11px] text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]"
+                    style={{ transition: 'color 140ms var(--ease-out-quart)' }}
+                  >
+                    Close
+                  </button>
+                </div>
               </div>
+              {showDraftsContextInput && (
+                <div className="px-4 py-2.5 border-b border-[var(--color-hairline)] bg-[var(--color-card-hover)]">
+                  <textarea
+                    value={draftsExtraContext}
+                    onChange={(e) => setDraftsExtraContext(e.target.value)}
+                    placeholder="Anything Claude should know for this draft — e.g. &ldquo;we met in June&rdquo;, &ldquo;meeting already booked for Aug 12&rdquo;, &ldquo;they asked for a follow-up after RSA&rdquo;…"
+                    rows={3}
+                    className="input w-full resize-y text-[12px]"
+                  />
+                  <div className="flex items-center justify-between mt-1.5">
+                    <p className="text-[10.5px] text-[var(--color-text-tertiary)]">Persists only for this draft request. Cleared on next thread.</p>
+                    <button
+                      onClick={() => { setShowDrafts(false); requestDrafts(); }}
+                      className="text-[11px] font-semibold text-[var(--color-accent)] hover:text-[var(--color-accent-deep)] px-2 py-1 rounded hover:bg-[var(--color-accent-soft)]"
+                      style={{ transition: 'all 140ms var(--ease-out-quart)' }}
+                    >
+                      Re-draft with context →
+                    </button>
+                  </div>
+                </div>
+              )}
+              {!draftsLoading && !draftsError && drafts.length > 0 && draftsContextUsed.length > 0 && (
+                <div className={cn(
+                  'px-4 py-1.5 text-[10.5px] border-b border-[var(--color-hairline)] flex items-start gap-1.5',
+                  draftsReadiness === 'thin'
+                    ? 'bg-[var(--color-accent-soft)] text-[var(--color-accent)]'
+                    : 'bg-[var(--color-surface)] text-[var(--color-text-tertiary)]',
+                )}>
+                  <span className="font-medium uppercase tracking-wide whitespace-nowrap">{draftsReadiness === 'thin' ? 'Thin context' : 'Used'}:</span>
+                  <span className="flex-1">{draftsContextUsed.join(', ')}{draftsReadiness === 'thin' ? ' — try Refresh profile for richer drafts' : ''}</span>
+                </div>
+              )}
               {draftsLoading && (
                 <div className="px-4 py-6 text-center text-[12px] text-[var(--color-text-tertiary)] flex items-center justify-center gap-2">
                   <div className="w-3.5 h-3.5 border-2 border-[var(--color-accent)] border-t-transparent rounded-full animate-spin" />
@@ -953,21 +1457,60 @@ export function MessageThread() {
               {!draftsLoading && !draftsError && drafts.length === 0 && (
                 <div className="px-4 py-4 text-[12px] text-[var(--color-text-tertiary)]">No drafts returned.</div>
               )}
+              <div className="row-in-stagger">
               {drafts.map((d, i) => (
                 <button
                   key={i}
                   onClick={() => applyDraft(d)}
-                  className="w-full text-left px-4 py-2.5 hover:bg-[var(--color-card-hover)] border-b border-[var(--color-hairline)] last:border-0"
+                  className="block w-full text-left px-4 py-2.5 hover:bg-[var(--color-card-hover)] border-b border-[var(--color-hairline)] last:border-0"
                   style={{ transition: 'background-color 140ms var(--ease-out-quart)' }}
                 >
                   <div className="eyebrow mb-1">Draft {i + 1}</div>
                   <p className="text-[12.5px] text-[var(--color-text-primary)] whitespace-pre-wrap leading-relaxed">{d}</p>
                 </button>
               ))}
+              </div>
               {!draftsLoading && drafts.length > 0 && (
                 <div className="px-4 py-2 text-[10.5px] text-[var(--color-text-tertiary)] border-t border-[var(--color-hairline)]">
                   Click a draft to insert it into the composer. Edit before sending.
                 </div>
+              )}
+            </div>
+          )}
+
+          {/* Draft-mode channel picker — slim row above the textarea. No
+              subject field: InboxPro targets messaging existing connections,
+              where LinkedIn doesn't require one and SN treats it as a
+              regular DM under the hood. */}
+          {isDraft && (
+            <div className="row-in px-4 pt-3 pb-2 flex items-center gap-2 flex-wrap border-b border-[var(--color-hairline)]">
+              <span className="eyebrow mr-1">Via</span>
+              <button
+                onClick={() => setChannel('linkedin')}
+                className={cn(
+                  'text-[11.5px] font-semibold px-2.5 py-1 rounded-md inline-flex items-center gap-1.5',
+                  draftChannel === 'linkedin'
+                    ? 'bg-[#0A66C2] text-white'
+                    : 'bg-[var(--color-surface-2)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]',
+                )}
+                style={{ transition: 'all 140ms var(--ease-out-quart)' }}
+              >
+                LinkedIn DM
+              </button>
+              <button
+                onClick={() => setChannel('sn')}
+                className={cn(
+                  'text-[11.5px] font-semibold px-2.5 py-1 rounded-md inline-flex items-center gap-1.5',
+                  draftChannel === 'sn'
+                    ? 'bg-[#0A66C2] text-white'
+                    : 'bg-[var(--color-surface-2)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]',
+                )}
+                style={{ transition: 'all 140ms var(--ease-out-quart)' }}
+              >
+                Sales Nav
+              </button>
+              {!draftChannel && (
+                <span className="text-[11px] text-[var(--color-text-tertiary)]">Pick a channel to enable send</span>
               )}
             </div>
           )}
@@ -977,9 +1520,19 @@ export function MessageThread() {
             value={replyText}
             onChange={(e) => { setReplyText(e.target.value); fireTyping(); }}
             onKeyDown={handleKeyDown}
-            placeholder="Write a message…  (⌘↵ to send, type /snippet shortcut)"
-            rows={3}
-            className="w-full bg-transparent px-4 pt-3 pb-2 text-[13.5px] text-[var(--color-text-primary)] placeholder-[var(--color-text-tertiary)] resize-none outline-none"
+            onFocus={() => setComposeFocused(true)}
+            onBlur={() => setComposeFocused(false)}
+            placeholder={isDraft ? 'Compose your opener… (⌘↵ to send)' : 'Write a message…  (⌘↵ to send, type /snippet shortcut)'}
+            key={snippetFlashKey}
+            className={cn(
+              'w-full bg-transparent px-4 pt-3 pb-2 text-[13.5px] text-[var(--color-text-primary)] placeholder-[var(--color-text-tertiary)] resize-none outline-none rounded-lg',
+              snippetFlashKey > 0 && 'snippet-flash',
+            )}
+            style={{
+              // Grow on focus, settle on blur — smoother than swapping rows.
+              minHeight: isDraft ? 140 : (composeFocused ? 96 : 64),
+              transition: 'min-height var(--dur-medium) var(--ease-out-fluid), box-shadow var(--dur-fast) var(--ease-out-soft)',
+            }}
           />
           <div className="flex items-center justify-between px-3 pb-2.5">
             <div className="flex items-center gap-1">
@@ -1013,12 +1566,17 @@ export function MessageThread() {
             </div>
             <button
               onClick={handleSend}
-              disabled={!replyText.trim() || sending || sentFlash}
+              disabled={
+                !replyText.trim() || sending || sentFlash ||
+                // Draft-mode extra gates — must have recipient + channel.
+                (isDraft && (!primary || !draftChannel))
+              }
               className={cn(
                 'flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-[12px] font-semibold',
+                sentFlash && 'send-fly',
                 sentFlash
                   ? 'bg-[var(--color-success)] text-white'
-                  : replyText.trim() && !sending
+                  : replyText.trim() && !sending && (!isDraft || (primary && draftChannel))
                     ? 'bg-[var(--color-accent-deep)] text-white hover:bg-[var(--color-accent)] active:scale-[0.97] active:shadow-inner'
                     : 'bg-[var(--color-surface-2)] text-[var(--color-text-muted)] cursor-not-allowed',
               )}

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { CORS, safeParseArray, optionsResponse } from '@/lib/api-utils';
-import type { AiCategory, Conversation, Enrichment, Participant } from '@/types';
+import type { Conversation, Enrichment, Participant } from '@/types';
 
 type ConversationRow = Awaited<ReturnType<typeof prisma.conversation.findFirstOrThrow>>;
 
@@ -22,9 +22,14 @@ function rowToConversation(row: ConversationRow): Conversation {
     isStarred: row.isStarred,
     snoozedUntil: row.snoozedUntil ? row.snoozedUntil.toISOString() : undefined,
     followUpAt: row.followUpAt ? row.followUpAt.toISOString() : undefined,
+    followUpReason: row.followUpReason ?? null,
+    followUpSource: (row.followUpSource as 'manual' | 'ai' | null) ?? null,
+    followUpConfidence: (row.followUpConfidence as 'high' | 'low' | null) ?? null,
+    followUpKind: (row.followUpKind as 'commitment' | 'soft' | null) ?? null,
+    followUpActor: (row.followUpActor as 'self' | 'them' | 'either' | null) ?? null,
+    needsReview: row.needsReview ?? false,
     notes: row.notes ?? '',
     labels: safeParseArray<string>(row.labels, []),
-    aiCategory: (row.aiCategory as AiCategory | null) ?? null,
     aiSummary: row.aiSummary ?? null,
     enrichment,
   };

@@ -1,25 +1,36 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ExternalLink, Plus, MessageCircle, Star, Clock, BellRing, Check, Sparkles, RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/cn';
+import { storage } from '@/lib/storage';
 import { useStore } from '@/store';
 import { formatDistanceToNowStrict, format } from 'date-fns';
-import type { AiCategory } from '@/types';
-
-const CATEGORY_LABEL: Record<AiCategory, string> = {
-  'cold-pitch': 'Cold pitch',
-  'warm-lead': 'Warm lead',
-  'client': 'Client',
-  'recruiter': 'Recruiter',
-  'intro': 'Intro',
-  'spam': 'Spam',
-  'other': 'Other',
-};
-
 export function ContactDetails() {
   const { activeConversationId, conversations, messages, labels, updateConversation, loadFromServer } = useStore();
   const [showLabelPicker, setShowLabelPicker] = useState(false);
+  const tagsCardRef = useRef<HTMLDivElement>(null);
+
+  // Note: auto-trigger on conv open is disabled. The hidden-tab approach
+  // didn't work (LinkedIn doesn't load in hidden tabs); the new foreground-tab
+  // approach is too disruptive to fire automatically. Manual button only.
+  const attemptedRef = useRef<Set<string>>(new Set());
+  void attemptedRef;
+
+  // Close the label picker when clicking outside the Tags card.
+  useEffect(() => {
+    if (!showLabelPicker) return;
+    function onMouseDown(e: MouseEvent) {
+      const target = e.target as Node;
+      if (tagsCardRef.current && !tagsCardRef.current.contains(target)) {
+        setShowLabelPicker(false);
+      }
+    }
+    document.addEventListener('mousedown', onMouseDown);
+    return () => document.removeEventListener('mousedown', onMouseDown);
+  }, [showLabelPicker]);
   const [classifying, setClassifying] = useState(false);
+  const [enriching, setEnriching] = useState(false);
+  const [enrichMsg, setEnrichMsg] = useState<string | null>(null);
 
   async function classifyThis(convId: string) {
     setClassifying(true);
@@ -35,13 +46,85 @@ export function ContactDetails() {
     }
   }
 
+  // Request rich profile enrichment via the Chrome extension. The extension
+  // opens the profile in a NEW VISIBLE TAB (LinkedIn won't fetch data in
+  // hidden tabs), waits for capture, then closes it.
+  function requestEnrichment(convId: string, profileUrl: string | null, profileUrn: string | null) {
+    // First-time: warn the user a tab will open. Suppress after that.
+    if (!storage.seenTabNotice.get()) {
+      const ok = window.confirm(
+        'A LinkedIn profile tab will open briefly so we can grab their About, work history, and recent posts. ' +
+        'It auto-closes in ~25 seconds. DO NOT close it manually.\n\nProceed?',
+      );
+      if (!ok) return;
+      storage.seenTabNotice.set(true);
+    }
+    setEnriching(true);
+    setEnrichMsg(null);
+    const requestId = `enrich-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    function onResult(ev: MessageEvent) {
+      if (ev.source !== window || !ev.data) return;
+      if (ev.data.type !== 'inboxpro-enrich-result' || ev.data.requestId !== requestId) return;
+      window.removeEventListener('message', onResult);
+      const resp = ev.data.response;
+      if (resp?.ok) {
+        // Two paths:
+        //   • resp.viaIntercept === true → background opened a hidden tab,
+        //     the intercept already wrote to the server. Wait a beat for
+        //     the intercept POST to land, then refresh.
+        //   • else → enrichment was returned directly. PUT it through.
+        const finish = () => {
+          loadFromServer().finally(() => {
+            setEnriching(false);
+            setEnrichMsg('Updated');
+            setTimeout(() => setEnrichMsg(null), 2000);
+          });
+        };
+        if (resp.viaIntercept) {
+          // Intercept fires async after page-load; give it ~2s to land.
+          setTimeout(finish, 2000);
+        } else if (resp.enrichment) {
+          fetch(`/api/conversations/${encodeURIComponent(convId)}/enrich`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enrichment: resp.enrichment }),
+          }).finally(finish);
+        } else {
+          finish();
+        }
+      } else {
+        setEnriching(false);
+        setEnrichMsg(resp?.reason ?? 'Could not enrich');
+        setTimeout(() => setEnrichMsg(null), 4000);
+      }
+    }
+    window.addEventListener('message', onResult);
+    window.postMessage(
+      {
+        type: 'inboxpro-enrich-request',
+        requestId,
+        profileUrl,
+        profileUrn,
+      },
+      '*',
+    );
+    // Safety timeout — hidden-tab enrichment takes ~20-45s end to end.
+    setTimeout(() => {
+      window.removeEventListener('message', onResult);
+      if (enriching) {
+        setEnriching(false);
+        setEnrichMsg('Timed out');
+        setTimeout(() => setEnrichMsg(null), 3000);
+      }
+    }, 50_000);
+  }
+
 
   const convo = conversations.find((c) => c.id === activeConversationId);
   if (!convo) {
     return (
       <div
-        className="card w-0 xl:w-[280px] opacity-0 xl:opacity-100 overflow-hidden flex-shrink-0 flex items-center justify-center p-6"
-        style={{ transition: 'width 200ms var(--ease-out-quart), opacity 180ms var(--ease-out-quart)' }}
+        className="card hidden xl:flex w-[280px] flex-shrink-0 items-center justify-center p-6"
       >
         <div className="text-center">
           <div className="w-10 h-10 rounded-[10px] bg-[var(--color-surface-2)] flex items-center justify-center mx-auto mb-3">
@@ -81,8 +164,7 @@ export function ContactDetails() {
 
   return (
     <aside
-      className="w-0 xl:w-[280px] opacity-0 xl:opacity-100 flex-shrink-0 flex flex-col gap-3 overflow-y-auto"
-      style={{ transition: 'width 200ms var(--ease-out-quart), opacity 180ms var(--ease-out-quart)' }}
+      className="hidden xl:flex w-[280px] flex-shrink-0 flex-col gap-3 overflow-y-auto"
     >
       {/* Profile card */}
       <div className="card p-5">
@@ -114,31 +196,59 @@ export function ContactDetails() {
           </div>
         </div>
 
-        {primary?.profileUrl ? (
-          <a
-            href={primary.profileUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11.5px] font-medium text-[var(--color-accent-fg)] bg-[var(--color-accent-soft)] rounded-full hover:bg-[var(--color-accent)] hover:text-white"
-            style={{ transition: 'all 160ms var(--ease-out-quart)' }}
-          >
-            <span className="font-semibold tracking-tight">in</span>
-            View profile
-            <ExternalLink className="w-2.5 h-2.5 opacity-60" />
-          </a>
-        ) : (
-          <span
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[10.5px] text-[var(--color-text-tertiary)] bg-[var(--color-surface-2)] rounded-full"
-            title="The URL is captured automatically the next time you visit this person's profile on LinkedIn."
-          >
-            <span className="font-semibold tracking-tight opacity-60">in</span>
-            URL not yet captured
-          </span>
-        )}
+        <div className="flex items-center gap-2 flex-wrap">
+          {primary?.profileUrl ? (
+            <a
+              href={primary.profileUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11.5px] font-medium text-[var(--color-accent-fg)] bg-[var(--color-accent-soft)] rounded-full hover:bg-[var(--color-accent)] hover:text-white"
+              style={{ transition: 'all 160ms var(--ease-out-quart)' }}
+            >
+              <span className="font-semibold tracking-tight">in</span>
+              View profile
+              <ExternalLink className="w-2.5 h-2.5 opacity-60" />
+            </a>
+          ) : (
+            <span
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[10.5px] text-[var(--color-text-tertiary)] bg-[var(--color-surface-2)] rounded-full"
+              title="The URL is captured automatically the next time you visit this person's profile on LinkedIn."
+            >
+              <span className="font-semibold tracking-tight opacity-60">in</span>
+              URL not yet captured
+            </span>
+          )}
+          {(primary?.profileUrl || primary?.id) && (
+            <button
+              onClick={() => requestEnrichment(convo.id, primary?.profileUrl ?? null, primary?.id ?? null)}
+              disabled={enriching}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[10.5px] text-[var(--color-text-secondary)] bg-[var(--color-surface-2)] rounded-full hover:bg-[var(--color-card-hover)] disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{ transition: 'all 140ms var(--ease-out-quart)' }}
+              title="Pull About, work history, education, and recent posts from LinkedIn"
+            >
+              <RefreshCw className={cn('w-2.5 h-2.5', enriching && 'animate-spin')} />
+              {enriching ? 'Loading…' : (enrichMsg ?? 'Refresh profile')}
+            </button>
+          )}
+        </div>
       </div>
 
+      {/* Enrichment status banner — shown while a LinkedIn profile tab is
+          open + capturing. Keeps the user oriented and discourages closing
+          the tab early. */}
+      {enriching && (
+        <div className="card p-3 border-[var(--color-accent)]/40 bg-[var(--color-accent-soft)]/60">
+          <div className="flex items-start gap-2.5">
+            <RefreshCw className="w-3.5 h-3.5 text-[var(--color-accent)] animate-spin flex-shrink-0 mt-0.5" />
+            <div className="text-[11.5px] text-[var(--color-text-secondary)] leading-relaxed">
+              <strong className="text-[var(--color-text-primary)]">Capturing profile data…</strong> A LinkedIn tab opened to grab About, work history, skills, and recent posts. It auto-closes in ~25s. <strong>Don&apos;t close it manually.</strong>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* AI summary */}
-      {(convo.aiCategory || convo.aiSummary) && (
+      {convo.aiSummary && (
         <div className="card p-4">
           <div className="flex items-center justify-between mb-2">
             <span className="eyebrow flex items-center gap-1.5">
@@ -154,18 +264,11 @@ export function ContactDetails() {
               <RefreshCw className={cn('w-3 h-3', classifying && 'animate-spin')} />
             </button>
           </div>
-          {convo.aiCategory && convo.aiCategory !== 'other' && (
-            <div className="inline-block mb-2 text-[10.5px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-[var(--color-accent-soft)] text-[var(--color-accent-fg)]">
-              {CATEGORY_LABEL[convo.aiCategory]}
-            </div>
-          )}
-          {convo.aiSummary && (
-            <p className="text-[12px] text-[var(--color-text-secondary)] leading-relaxed">{convo.aiSummary}</p>
-          )}
+          <p className="text-[12px] text-[var(--color-text-secondary)] leading-relaxed">{convo.aiSummary}</p>
         </div>
       )}
 
-      {!convo.aiCategory && !convo.aiSummary && (
+      {!convo.aiSummary && (
         <div className="card p-4">
           <div className="flex items-center justify-between">
             <span className="eyebrow flex items-center gap-1.5">
@@ -224,7 +327,7 @@ export function ContactDetails() {
       </div>
 
       {/* Tags */}
-      <div className="card p-4 relative">
+      <div ref={tagsCardRef} className={cn('card p-4 relative', showLabelPicker && 'z-30')}>
         <div className="flex items-center justify-between mb-3">
           <span className="eyebrow">Tags</span>
           <button
@@ -306,6 +409,127 @@ export function ContactDetails() {
             {convo.enrichment.company && <DetailRow label="Company" value={convo.enrichment.company} />}
             {convo.enrichment.location && <DetailRow label="Location" value={convo.enrichment.location} />}
             {convo.enrichment.industry && <DetailRow label="Industry" value={convo.enrichment.industry} />}
+          </div>
+        </div>
+      )}
+
+      {/* About */}
+      {convo.enrichment?.about && (
+        <div className="card p-4">
+          <div className="eyebrow mb-2">About</div>
+          <p className="text-[12px] text-[var(--color-text-secondary)] leading-relaxed whitespace-pre-wrap line-clamp-6">
+            {convo.enrichment.about}
+          </p>
+        </div>
+      )}
+
+      {/* Prior roles */}
+      {convo.enrichment?.prevRoles && convo.enrichment.prevRoles.length > 0 && (
+        <div className="card p-4">
+          <div className="eyebrow mb-3">Prior roles</div>
+          <div className="space-y-2.5">
+            {convo.enrichment.prevRoles.slice(0, 5).map((r, i) => (
+              <div key={i} className="text-[12px]">
+                <div className="text-[var(--color-text-primary)] font-medium truncate">
+                  {r.role || '—'}
+                </div>
+                <div className="text-[11px] text-[var(--color-text-tertiary)] truncate">
+                  {r.company || '—'}
+                  {(r.from || r.to) && (
+                    <span className="mono ml-1">· {r.from || '?'} – {r.to || '?'}</span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Education */}
+      {convo.enrichment?.education && convo.enrichment.education.length > 0 && (
+        <div className="card p-4">
+          <div className="eyebrow mb-3">Education</div>
+          <div className="space-y-2">
+            {convo.enrichment.education.slice(0, 3).map((e, i) => (
+              <div key={i} className="text-[12px]">
+                <div className="text-[var(--color-text-primary)] font-medium truncate">
+                  {e.school || '—'}
+                </div>
+                {(e.degree || e.from || e.to) && (
+                  <div className="text-[11px] text-[var(--color-text-tertiary)] truncate">
+                    {e.degree && <span>{e.degree}</span>}
+                    {(e.from || e.to) && (
+                      <span className="mono ml-1">· {e.from || '?'} – {e.to || '?'}</span>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Skills */}
+      {convo.enrichment?.skills && convo.enrichment.skills.length > 0 && (
+        <div className="card p-4">
+          <div className="eyebrow mb-3">Skills</div>
+          <div className="flex flex-wrap gap-1.5">
+            {convo.enrichment.skills.slice(0, 12).map((s, i) => (
+              <span key={i} className="text-[11px] px-2 py-0.5 rounded-full bg-[var(--color-surface-2)] text-[var(--color-text-secondary)]">
+                {s}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Recent posts */}
+      {convo.enrichment?.recentPosts && convo.enrichment.recentPosts.length > 0 && (
+        <div className="card p-4">
+          <div className="eyebrow mb-3">Recent posts</div>
+          <div className="space-y-2.5">
+            {convo.enrichment.recentPosts.slice(0, 5).map((p, i) => {
+              const Tag = p.url ? 'a' : 'div';
+              const tagProps = p.url
+                ? { href: p.url, target: '_blank' as const, rel: 'noreferrer' as const }
+                : {};
+              return (
+                <Tag
+                  key={i}
+                  {...tagProps}
+                  className={cn(
+                    'block text-[12px] leading-relaxed',
+                    p.url && 'hover:bg-[var(--color-card-hover)] rounded -mx-1 px-1 py-0.5',
+                  )}
+                  style={p.url ? { transition: 'background-color 140ms var(--ease-out-quart)' } : undefined}
+                >
+                  <div className="flex items-baseline gap-2 mb-0.5">
+                    {p.kind === 'reshare' && (
+                      <span className="text-[9px] uppercase tracking-wide text-[var(--color-text-tertiary)] font-medium">
+                        Reshare
+                      </span>
+                    )}
+                    {p.postedAt && (() => {
+                      // Defensive: postedAt may be a raw "1w •" marker from
+                      // an older capture rather than an ISO date. Show the
+                      // raw text in that case instead of throwing.
+                      const d = new Date(p.postedAt);
+                      const valid = !isNaN(d.getTime());
+                      return (
+                        <span className="text-[10px] text-[var(--color-text-tertiary)] mono">
+                          {valid ? formatDistanceToNowStrict(d, { addSuffix: true }) : p.postedAt}
+                        </span>
+                      );
+                    })()}
+                  </div>
+                  {p.text && (
+                    <p className="text-[var(--color-text-secondary)] line-clamp-3">
+                      {p.text}
+                    </p>
+                  )}
+                </Tag>
+              );
+            })}
           </div>
         </div>
       )}

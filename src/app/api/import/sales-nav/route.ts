@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { CORS, optionsResponse } from '@/lib/api-utils';
 import type { Participant } from '@/types';
+import { linkParticipantsToConversation } from '@/lib/contact-upsert';
 
 // POST { items: [{ convId, name, headline?, profileUrl?, avatarUrl?,
 //                  lastMessage?, lastMessageAt?, unreadCount? }, ...] }
@@ -147,6 +148,7 @@ export async function POST(req: NextRequest) {
             labels: '[]',
           },
         });
+        await linkParticipantsToConversation(it.convId, [participant], null);
         created++;
       }
     }

@@ -34,6 +34,14 @@
       url.includes('voyagerIdentityDashProfileCards') ||
       url.includes('voyagerIdentityDashProfileViews'));
 
+  // Modern LinkedIn — server-driven UI components. Profile pages render via
+  // /flagship-web/rsc-action/actions/component?componentId=*.profile.*
+  // and the response bodies contain the text we want (About, Experience, etc.).
+  const isSduiProfileURL = (url) =>
+    typeof url === 'string' &&
+    url.includes('/flagship-web/rsc-action/actions/component') &&
+    url.includes('componentId=com.linkedin.sdui.generated.profile');
+
   // Sales Navigator — different API surface entirely. Match generously: any
   // URL containing "sales-api", "sales-mvc", "voyagerSales", "salesApi", or
   // "salesnavigator". URLs may be relative (XHR often uses /sales-api/...)
@@ -100,20 +108,7 @@
   }
 
   // Catch-all flag: any URL we want to harvest entities from.
-  const isHarvestURL = (url) => isMessagingURL(url) || isProfileURL(url) || isSalesNavURL(url);
-
-  // Capture any messaging-related action (POST/DELETE/PATCH/PUT) — these are
-  // mutations like delete-conversation, archive, mark-read, send.
-  const isActionURL = (url, method) => {
-    if (typeof url !== 'string') return false;
-    if (!url.includes('linkedin.com/voyager/api/')) return false;
-    if (!['POST', 'DELETE', 'PATCH', 'PUT'].includes((method || '').toUpperCase())) return false;
-    return (
-      url.includes('Messag') || url.includes('messag') ||
-      url.includes('Conversation') || url.includes('conversation') ||
-      url.includes('Inbox') || url.includes('inbox')
-    );
-  };
+  const isHarvestURL = (url) => isMessagingURL(url) || isProfileURL(url) || isSalesNavURL(url) || isSduiProfileURL(url);
 
   // Sales Navigator action URLs — POST createMessage, archive, mark-read, etc.
   // Broad match: any non-GET on a sales-api messaging path. SN uses POST, PATCH,
@@ -143,24 +138,6 @@
     const method = (init?.method || 'GET').toUpperCase();
     const reqBody = init?.body;
 
-    // Log the request side BEFORE the response (so action captures happen even on 4xx)
-    if (isActionURL(url, method) || isSnActionURL(url, method)) {
-      let bodyText = null;
-      try {
-        if (typeof reqBody === 'string') bodyText = reqBody;
-        else if (reqBody && typeof reqBody.text === 'function') bodyText = await reqBody.text().catch(() => null);
-        else if (reqBody instanceof FormData) {
-          bodyText = JSON.stringify(Object.fromEntries(reqBody.entries()));
-        }
-      } catch (e) {}
-      postIntercept({
-        __inboxproAction: true,
-        method,
-        url,
-        body: bodyText,
-      });
-    }
-
     if (url && (url.includes('linkedin.com') || url.startsWith('/'))) tapAllUrls(url, 'fetch');
     const res = await origFetch.apply(this, args);
     try {
@@ -171,15 +148,6 @@
         clone.text().then((text) => {
           postIntercept({ __inboxproIntercept: true, url, body: text });
         }).catch(() => {});
-      }
-      // Also forward the response status of action requests, so we can verify
-      if (isActionURL(url, method)) {
-        postIntercept({
-          __inboxproActionResponse: true,
-          method,
-          url,
-          status: res.status,
-        });
       }
       // SN action — POST createMessage etc. Trigger an inbox refresh.
       if (isSnActionURL(url, method) && res.ok) {
@@ -200,17 +168,6 @@
     return origOpen.call(this, method, url, ...rest);
   };
   XMLHttpRequest.prototype.send = function(body) {
-    if (isActionURL(this.__inboxproUrl, this.__inboxproMethod) ||
-        isSnActionURL(this.__inboxproUrl, this.__inboxproMethod)) {
-      let bodyText = null;
-      try { bodyText = typeof body === 'string' ? body : null; } catch (e) {}
-      postIntercept({
-        __inboxproAction: true,
-        method: this.__inboxproMethod,
-        url: this.__inboxproUrl,
-        body: bodyText,
-      });
-    }
     this.addEventListener('load', () => {
       const u = this.__inboxproUrl;
       try {
@@ -250,14 +207,6 @@
       try {
         if (isSnActionURL(u, this.__inboxproMethod) && this.status >= 200 && this.status < 300) {
           postIntercept({ __inboxproSnAction: true, url: u, method: this.__inboxproMethod, status: this.status });
-        }
-        if (isActionURL(u, this.__inboxproMethod)) {
-          postIntercept({
-            __inboxproActionResponse: true,
-            method: this.__inboxproMethod,
-            url: u,
-            status: this.status,
-          });
         }
       } catch {}
     });

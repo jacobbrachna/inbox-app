@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { AppErrorBoundary } from "@/components/shared/error-boundary";
 
 export const metadata: Metadata = {
   title: "InboxPro — LinkedIn Inbox Manager",
@@ -40,7 +41,9 @@ export default function RootLayout({
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
       </head>
-      <body className="h-full" suppressHydrationWarning>{children}</body>
+      <body className="h-full" suppressHydrationWarning>
+        <AppErrorBoundary>{children}</AppErrorBoundary>
+      </body>
     </html>
   );
 }

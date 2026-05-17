@@ -4,37 +4,25 @@ import { Plus, Trash2, Check, X } from 'lucide-react';
 import { useStore, useAuthStore } from '@/store';
 import type { Snippet } from '@/types';
 import { Badge } from '@/components/shared/badge';
+import { useExtensionReady } from '@/lib/use-extension-ready';
 import { cn } from '@/lib/cn';
 import { AccentPicker } from '@/components/theme/accent-picker';
 import { AiSettings } from './ai-settings';
+import { YourContext } from './your-context';
+import { DocumentsPanel } from './documents-panel';
 import { LinkedInImport } from './linkedin-import';
 
 
 function RecoverButton() {
   const [state, setState] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
   const [logLines, setLogLines] = useState<string[]>([]);
-  const [bridgeReady, setBridgeReady] = useState<boolean | null>(null);
+  const bridgeReady = useExtensionReady();
 
   function log(msg: string, level: 'info' | 'warn' | 'error' = 'info') {
     const time = new Date().toLocaleTimeString();
     const prefix = level === 'error' ? '✗ ' : level === 'warn' ? '⚠ ' : '· ';
     setLogLines((lines) => [...lines.slice(-200), `[${time}] ${prefix}${msg}`]);
   }
-
-  // Detect the extension bridge via DOM marker (synchronous) + postMessage
-  useEffect(() => {
-    function check() {
-      const have = !!document.getElementById('inboxpro-bridge-marker');
-      setBridgeReady(have);
-    }
-    check();
-    function onMessage(ev: MessageEvent) {
-      if (ev.data?.type === 'inboxpro-bridge-ready') setBridgeReady(true);
-    }
-    window.addEventListener('message', onMessage);
-    const intv = setInterval(check, 500);
-    return () => { window.removeEventListener('message', onMessage); clearInterval(intv); };
-  }, []);
 
   useEffect(() => {
     function onMessage(ev: MessageEvent) {
@@ -111,7 +99,7 @@ function RecoverButton() {
             Copy log
           </button>
         )}
-        {bridgeReady === false && (
+        {!bridgeReady && (
           <span className="text-xs text-[var(--color-accent)]">⚠ Extension not detected on this page</span>
         )}
       </div>
@@ -171,7 +159,7 @@ export function SettingsPanel() {
   const PRESET_COLORS = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#3b82f6', '#8b5cf6', '#ec4899', '#6b7280'];
 
   return (
-    <div className="card flex-1 overflow-y-auto p-6 max-w-2xl">
+    <div className="card flex-1 overflow-y-auto p-6 max-w-4xl">
       <h2 className="text-[18px] font-semibold tracking-tight text-[var(--color-text-primary)] mb-6">Settings</h2>
 
       {/* Appearance */}
@@ -191,6 +179,22 @@ export function SettingsPanel() {
         <h3 className="eyebrow mb-3">AI</h3>
         <div className="card p-5">
           <AiSettings />
+        </div>
+      </section>
+
+      {/* Your context — fuels AI personalization */}
+      <section className="mb-8">
+        <h3 className="eyebrow mb-3">Your context</h3>
+        <div className="card p-5">
+          <YourContext />
+        </div>
+      </section>
+
+      {/* Reference documents */}
+      <section className="mb-8">
+        <h3 className="eyebrow mb-3">Reference documents</h3>
+        <div className="card p-5">
+          <DocumentsPanel />
         </div>
       </section>
 
@@ -242,15 +246,17 @@ export function SettingsPanel() {
               aria-checked={mirrorToLinkedIn}
               onClick={() => setMirrorToLinkedIn(!mirrorToLinkedIn)}
               className={cn(
-                'relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors',
+                'relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full overflow-hidden',
                 mirrorToLinkedIn ? 'bg-[var(--color-accent-deep)]' : 'bg-[var(--color-surface-2)]',
               )}
+              style={{ transition: 'background-color var(--dur-medium) var(--ease-out-soft)' }}
             >
               <span
                 className={cn(
-                  'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
+                  'inline-block h-4 w-4 transform rounded-full bg-white',
                   mirrorToLinkedIn ? 'translate-x-6' : 'translate-x-1',
                 )}
+                style={{ transition: 'transform var(--dur-medium) var(--ease-out-fluid)' }}
               />
             </button>
           </label>

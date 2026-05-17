@@ -35,6 +35,48 @@ const entitiesByUrn = new Map();        // entityUrn → any LinkedIn entity (pr
 const messageURLPatterns = [];
 let myProfileUrn = '';                  // resolved during sync
 
+// ── Profile capture consent (gates SDUI POSTs on /in/* pages) ──────────────
+// Re-evaluated on every SPA navigation between profiles. Three outcomes:
+//   • App-initiated tab → POST silently (full capture flow active)
+//   • Messageable contact (already has conversation) → POST silently
+//   • Stranger → SKIP POST (wait for "Import to InboxPro" button click)
+//
+// LinkedIn's React app does SPA navigation between /in/<slug> pages via
+// pushState — content scripts don't re-execute, so we maintain a cache
+// keyed by slug and refresh it on each URL change.
+const sduiConsentBySlug = new Map(); // slug → Promise<{ allowed, reason }>
+
+function computeSduiConsent(slug) {
+  return (async () => {
+    let appInitiated = false;
+    try {
+      const resp = await new Promise((resolve) => {
+        try { chrome.runtime.sendMessage({ action: 'is-app-initiated' }, (r) => resolve(r)); }
+        catch { resolve(null); }
+      });
+      appInitiated = !!resp?.initiated;
+    } catch {}
+    if (appInitiated) return { allowed: true, reason: 'app-initiated' };
+
+    try {
+      const r = await fetch(`http://localhost:3030/api/contacts/by-slug/${encodeURIComponent(slug)}/status`);
+      if (r.ok) {
+        const j = await r.json();
+        if (j.messageable) return { allowed: true, reason: 'messageable' };
+      }
+    } catch {}
+    return { allowed: false, reason: 'stranger' };
+  })();
+}
+
+function getCurrentSduiConsent() {
+  const m = location.pathname.match(/^\/in\/([^/]+)/);
+  if (!m) return Promise.resolve({ allowed: false, reason: 'not-profile' });
+  const slug = m[1];
+  if (!sduiConsentBySlug.has(slug)) sduiConsentBySlug.set(slug, computeSduiConsent(slug));
+  return sduiConsentBySlug.get(slug);
+}
+
 // ── Auto-sync state ───────────────────────────────────────────────────────────
 // The canonical sync path is the 10s poll in bridge.js. This flag just guards
 // the one-time load of "known conv URNs" used to gate notifications.
@@ -286,23 +328,6 @@ window.addEventListener('message', (ev) => {
   chrome.runtime.sendMessage({ action: 'snRefreshNow' }).catch(() => {});
 });
 
-// ── Action captures: forward to /api/captured-actions so we can build mirroring later
-window.addEventListener('message', (ev) => {
-  if (!ev.data || (!ev.data.__inboxproAction && !ev.data.__inboxproActionResponse)) return;
-  fetch('http://localhost:3030/api/captured-actions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      kind: ev.data.__inboxproAction ? 'request' : 'response',
-      method: ev.data.method,
-      url: ev.data.url,
-      body: ev.data.body ?? null,
-      status: ev.data.status ?? null,
-      capturedAt: Date.now(),
-    }),
-  }).catch(() => {});
-});
-
 // Extract a LinkedIn category (PRIMARY_INBOX/OTHER/ARCHIVE/...) from a captured
 // URL. LinkedIn's conv-list query embeds it as `category:ARCHIVE` in the
 // variables block. Returns '' when the URL isn't a category query (e.g. it's
@@ -355,6 +380,53 @@ window.addEventListener('message', (ev) => {
 
   if (url.includes('messengerMessages.') && !messageURLPatterns.includes(url)) {
     messageURLPatterns.push(url);
+  }
+
+  // LinkedIn profile responses — pass body to background so it can run
+  // extractFromVoyager (rich fields) and forward to /api/profile-capture/voyager-tap.
+  // Triggers passively whenever LinkedIn's UI loads profile data: visits,
+  // hovers, hidden-tab enrichment, etc. Throttled so we don't spam.
+  const isLiProfileUrl = (
+    url.includes('voyagerIdentityDashProfiles') ||
+    url.includes('voyagerIdentityDashProfileCards') ||
+    url.includes('voyagerIdentityDashProfileViews') ||
+    url.includes('/voyager/api/identity/profiles')
+  );
+  if (isLiProfileUrl && typeof ev.data.body === 'string' && ev.data.body.length > 100) {
+    try {
+      chrome.runtime.sendMessage({
+        action: 'voyagerProfileTap',
+        url,
+        body: ev.data.body,
+      });
+    } catch {
+      // extension context invalidated (e.g. reloaded); silent
+    }
+  }
+
+  // SDUI profile components — modern LinkedIn rendering path. Forward raw
+  // body to the debug endpoint so we can inspect the shape and build a parser.
+  const isSduiProfile = (
+    url.includes('/flagship-web/rsc-action/actions/component') &&
+    url.includes('componentId=com.linkedin.sdui.generated.profile')
+  );
+  if (isSduiProfile && typeof ev.data.body === 'string' && ev.data.body.length > 100) {
+    // Pull the slug from current page URL — content scripts only run on
+    // linkedin.com so location.pathname is reliable.
+    const slugMatch = location.pathname.match(/^\/in\/([^/]+)/);
+    const profileSlug = slugMatch ? slugMatch[1] : null;
+    const bodySlice = ev.data.body.slice(0, 200_000);
+    // Await per-slug consent verdict before POSTing. The cache key is the
+    // slug from current URL — if the user is on the stranger's profile,
+    // we get the stranger verdict (not whoever was visited before).
+    getCurrentSduiConsent().then((c) => {
+      if (!c?.allowed) return;
+      fetch('http://localhost:3030/api/profile-sdui', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, profileSlug, body: bodySlice }),
+      }).catch(() => {});
+    });
   }
 
   // Sales Navigator profile endpoint — headlines/avatars/etc.

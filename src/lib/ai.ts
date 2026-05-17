@@ -40,3 +40,10 @@ export async function requireAnthropic(): Promise<Anthropic> {
   }
   return c;
 }
+
+// Returns true if an API key is configured. Lightweight check for gating
+// features (e.g., skip regex auto-labels when AI labeling is available).
+export async function hasApiKey(): Promise<boolean> {
+  const key = await getApiKey();
+  return !!key;
+}

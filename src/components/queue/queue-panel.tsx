@@ -10,7 +10,6 @@ interface QueueItem {
   headline: string;
   company: string | null;
   avatarUrl: string | null;
-  aiCategory: string | null;
   lastMessageAt: string;
   reason: string;
   daysSince: number;
@@ -62,8 +61,6 @@ const BUCKETS = [
 export function QueuePanel() {
   const [data, setData] = useState<QueueData | null>(null);
   const [loading, setLoading] = useState(false);
-  const [scoring, setScoring] = useState<{ active: boolean; done: number; total: number } | null>(null);
-  const [scoreError, setScoreError] = useState<string | null>(null);
   const setActiveConversationId = useStore((s) => s.setActiveConversationId);
   const setActiveFilter = useStore((s) => s.setActiveFilter);
 
@@ -75,38 +72,8 @@ export function QueuePanel() {
       .catch(() => { setLoading(false); return null; });
   }
 
-  // Score any unscored convs surfaced by the queue endpoint, then refresh once done.
-  async function scoreUnscored(d: QueueData) {
-    if (!d.unscored || d.unscored.length === 0) return;
-    setScoreError(null);
-    setScoring({ active: true, done: 0, total: d.unscored.length });
-    try {
-      const r = await fetch('/api/queue/score-batch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ convIds: d.unscored }),
-      });
-      const result = await r.json();
-      if (!r.ok) {
-        setScoreError(result.error === 'no_api_key'
-          ? 'Add your Anthropic API key in Settings to enable AI scoring.'
-          : (result.error ?? 'AI scoring failed'));
-      } else {
-        setScoring({ active: false, done: result.scored ?? 0, total: d.unscored.length });
-        await load();
-        return;
-      }
-    } catch (e) {
-      setScoreError(e instanceof Error ? e.message : 'AI scoring failed');
-    }
-    setScoring(null);
-  }
-
   useEffect(() => {
-    (async () => {
-      const d = await load();
-      if (d) await scoreUnscored(d);
-    })();
+    load();
   }, []);
 
   function open(id: string) {
@@ -138,30 +105,6 @@ export function QueuePanel() {
           <p className="text-[11.5px] text-[var(--color-text-tertiary)] mt-1">
             No hot threads, no overdue follow-ups, no going-cold leads, no stale relationships.
           </p>
-        </div>
-      )}
-
-      {/* AI scoring status banner — visible while batch scoring runs OR if missing key */}
-      {(scoring?.active || scoreError) && (
-        <div
-          className={cn(
-            'card p-3 mb-6 flex items-center gap-2.5 text-[12px]',
-            scoreError ? 'border-[var(--color-danger)]/40' : '',
-          )}
-        >
-          {scoring?.active ? (
-            <>
-              <Sparkles className="w-3.5 h-3.5 text-[var(--color-accent)] animate-pulse" />
-              <span className="text-[var(--color-text-secondary)]">
-                AI scoring {scoring.total} conversations… this happens once and gets cached.
-              </span>
-            </>
-          ) : scoreError ? (
-            <>
-              <Sparkles className="w-3.5 h-3.5 text-[var(--color-text-tertiary)]" />
-              <span className="text-[var(--color-text-tertiary)]">{scoreError}</span>
-            </>
-          ) : null}
         </div>
       )}
 

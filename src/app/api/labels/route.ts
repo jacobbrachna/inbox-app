@@ -5,7 +5,14 @@ import type { Label } from '@/types';
 
 export async function GET() {
   const rows = await prisma.label.findMany();
-  const labels: Label[] = rows.map((r) => ({ id: r.id, name: r.name, color: r.color }));
+  const labels: Label[] = rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    color: r.color,
+    description: r.description,
+    aiManaged: r.aiManaged,
+    exclusiveGroup: r.exclusiveGroup,
+  }));
   return NextResponse.json({ labels }, { headers: CORS });
 }
 
@@ -21,10 +28,31 @@ export async function POST(req: NextRequest) {
 
     for (const l of incoming) {
       if (!l?.id) continue;
+      const description = l.description ?? null;
+      // A label is AI-managed when it has a description (so the AI knows how
+      // to apply it). Explicit aiManaged in the payload overrides this default.
+      const aiManaged = typeof l.aiManaged === 'boolean'
+        ? l.aiManaged
+        : !!description;
+      const exclusiveGroup = l.exclusiveGroup ?? null;
+
       await prisma.label.upsert({
         where: { id: l.id },
-        update: { name: l.name, color: l.color },
-        create: { id: l.id, name: l.name, color: l.color },
+        update: {
+          name: l.name,
+          color: l.color,
+          ...(description !== undefined ? { description } : {}),
+          aiManaged,
+          exclusiveGroup,
+        },
+        create: {
+          id: l.id,
+          name: l.name,
+          color: l.color,
+          description,
+          aiManaged,
+          exclusiveGroup,
+        },
       });
     }
 

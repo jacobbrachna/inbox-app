@@ -10,7 +10,7 @@ export function LinkedInImport() {
   const inputRef = useRef<HTMLInputElement>(null);
   const [state, setState] = useState<'idle' | 'reading' | 'sending' | 'done' | 'error'>('idle');
   const [msg, setMsg] = useState('');
-  const [result, setResult] = useState<{ rowsParsed: number; contactsMatched: number; contactsEnriched: number } | null>(null);
+  const [result, setResult] = useState<{ rowsParsed: number; contactsMatched: number; contactsEnriched: number; contactsUpserted?: number } | null>(null);
 
   async function handleFile(file: File) {
     setState('reading');
@@ -119,9 +119,13 @@ export function LinkedInImport() {
             <Check className="w-3.5 h-3.5" /> Imported
           </div>
           <div className="text-[11.5px] text-[var(--color-text-secondary)] leading-relaxed">
-            Parsed <strong>{result.rowsParsed.toLocaleString()}</strong> connections ·
-            matched URL to <strong>{result.contactsMatched.toLocaleString()}</strong> new contacts ·
-            updated company/role on <strong>{result.contactsEnriched.toLocaleString()}</strong> contacts.
+            Parsed <strong>{result.rowsParsed.toLocaleString()}</strong> connections.
+            {typeof result.contactsUpserted === 'number' && (
+              <> Saved <strong>{result.contactsUpserted.toLocaleString()}</strong> to your contacts.</>
+            )}
+            {' '}Linked URLs to <strong>{result.contactsMatched.toLocaleString()}</strong> conversation
+            {result.contactsMatched === 1 ? '' : 's'} ·
+            updated company/role on <strong>{result.contactsEnriched.toLocaleString()}</strong>.
           </div>
         </div>
       )}

@@ -1,8 +1,10 @@
 'use client';
-import { useEffect, useState, useCallback } from 'react';
-import { Check, AlertCircle, Puzzle, MessagesSquare, Download, FileText, Sparkles, ArrowRight, ArrowLeft } from 'lucide-react';
+import { useEffect, useRef, useState, useCallback } from 'react';
+import { Check, AlertCircle, Puzzle, MessagesSquare, Download, FileText, Sparkles, ArrowRight, ArrowLeft, Copy, ExternalLink, RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { useStore } from '@/store';
+import { storage } from '@/lib/storage';
+import { useExtensionReady } from '@/lib/use-extension-ready';
 
 // Steps in order. Order matters — index used in progress dots + persisted state.
 const STEPS = [
@@ -15,41 +17,38 @@ const STEPS = [
 
 type StepId = typeof STEPS[number]['id'];
 
-const STORAGE_KEY = 'inboxpro-onboarding-step';
-const COMPLETED_KEY = 'inboxpro-onboarded';
+interface OnboardingWizardProps {
+  preview?: boolean;
+  /** Called when the user finishes the wizard. Parent flips its onboarded
+   *  flag and re-renders into the inbox — no page reload needed. */
+  onComplete?: () => void;
+}
 
-export function OnboardingWizard({ preview = false }: { preview?: boolean }) {
+export function OnboardingWizard({ preview = false, onComplete }: OnboardingWizardProps) {
   const { conversations } = useStore();
   const [step, setStep] = useState<number>(() => {
     // Preview mode always starts at step 0 so you can walk through cleanly.
     if (preview) return 0;
-    if (typeof window === 'undefined') return 0;
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    const n = raw ? parseInt(raw, 10) : 0;
-    return Number.isFinite(n) ? Math.max(0, Math.min(STEPS.length - 1, n)) : 0;
+    return Math.max(0, Math.min(STEPS.length - 1, storage.onboardingStep.get()));
   });
-  const [extensionReady, setExtensionReady] = useState(false);
+  const extensionReady = useExtensionReady();
 
   // Persist current step (skip in preview — don't pollute real state)
   useEffect(() => {
     if (preview) return;
-    try { window.localStorage.setItem(STORAGE_KEY, String(step)); } catch {}
+    storage.onboardingStep.set(step);
   }, [step, preview]);
 
-  // Poll for extension bridge marker — auto-advances when detected
-  useEffect(() => {
-    function check() {
-      setExtensionReady(!!document.getElementById('inboxpro-bridge-marker'));
-    }
-    check();
-    const id = setInterval(check, 1000);
-    return () => clearInterval(id);
-  }, []);
-
-  // If user reloads with a well-populated DB, skip ahead past sign-in.
-  // Threshold of 20 prevents bridge-poll trickle from jumping the wizard.
+  // Auto-advance past Sign-in once the first batch of conversations lands.
+  // Previously gated to >=20 as a reload safety; now we trust any positive
+  // count because SignInStep listens for the sync events directly.
   useEffect(() => {
     if (preview) return;
+    if (conversations.length > 0 && step === 1) {
+      setStep(2);
+    }
+    // Reload-safety: if a user comes back with a populated DB and is somehow
+    // earlier than Sign-in, jump them to Import directly.
     if (conversations.length >= 20 && step < 2) {
       setStep(2);
     }
@@ -61,10 +60,21 @@ export function OnboardingWizard({ preview = false }: { preview?: boolean }) {
   function goNext() { if (step < STEPS.length - 1) setStep(step + 1); }
   function goBack() { if (step > 0) setStep(step - 1); }
   function finish() {
-    try { window.localStorage.setItem(COMPLETED_KEY, '1'); } catch {}
-    try { window.localStorage.removeItem(STORAGE_KEY); } catch {}
-    // Force a re-render of the page so the wizard unmounts and the inbox renders
-    window.location.reload();
+    storage.onboarded.set(true);
+    storage.onboardingStep.clear();
+    // Hand off to the parent so it can flip its `onboarded` flag and
+    // re-render into the inbox in-place. View Transitions API wraps the
+    // swap in a clean cross-fade where supported.
+    const handoff = () => {
+      if (onComplete) onComplete();
+      else window.location.reload(); // fallback for legacy callers
+    };
+    const doc = document as Document & { startViewTransition?: (cb: () => void) => unknown };
+    if (typeof doc.startViewTransition === 'function' && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      doc.startViewTransition(handoff);
+    } else {
+      handoff();
+    }
   }
 
   return (
@@ -114,7 +124,7 @@ export function OnboardingWizard({ preview = false }: { preview?: boolean }) {
           {current.id === 'signin' && <SignInStep extensionReady={extensionReady} />}
           {current.id === 'import' && <ImportStep />}
           {current.id === 'ai' && <AiKeyStep />}
-          {current.id === 'done' && <DoneStep />}
+          {current.id === 'done' && <DoneStep onBackToSignIn={() => setStep(1)} />}
         </div>
 
         {/* Footer */}
@@ -136,8 +146,9 @@ export function OnboardingWizard({ preview = false }: { preview?: boolean }) {
                 onClick={goNext}
                 className="px-3 py-1.5 text-[12.5px] font-medium text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-2)] rounded-lg"
                 style={{ transition: 'background-color 140ms var(--ease-out-quart), color 140ms var(--ease-out-quart)' }}
+                title={current.id === 'import' ? 'You can import in Settings later' : 'You can add a key in Settings later'}
               >
-                Skip
+                {current.id === 'import' ? 'Skip — I\'ll import later' : 'Skip — add a key later'}
               </button>
             )}
             {!onLast ? (
@@ -172,7 +183,14 @@ export function OnboardingWizard({ preview = false }: { preview?: boolean }) {
 
 // ─── Steps ────────────────────────────────────────────────────────────────
 
+// Absolute path where both dev users (npm run dev) and .app users (the
+// GetInboxPro launcher script clones into the same place) end up with
+// the extension folder. Shown to the user with a copy button.
+const EXTENSION_PATH = '~/Documents/inbox-app/extension';
+
 function ExtensionStep({ ready, onContinue }: { ready: boolean; onContinue: () => void }) {
+  const [copied, setCopied] = useState(false);
+
   // Auto-advance when extension detected so user doesn't have to hit Continue
   useEffect(() => {
     if (ready) {
@@ -180,6 +198,12 @@ function ExtensionStep({ ready, onContinue }: { ready: boolean; onContinue: () =
       return () => clearTimeout(t);
     }
   }, [ready, onContinue]);
+
+  function copyPath() {
+    void navigator.clipboard.writeText(EXTENSION_PATH).catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1600);
+  }
 
   return (
     <div>
@@ -205,7 +229,23 @@ function ExtensionStep({ ready, onContinue }: { ready: boolean; onContinue: () =
           <ol className="space-y-2 text-[12.5px] text-[var(--color-text-secondary)]">
             <li className="flex gap-2.5">
               <span className="mono text-[var(--color-text-tertiary)] tabular-nums flex-shrink-0">1.</span>
-              <span>Open <code className="kbd mx-0.5">chrome://extensions</code> in a new tab</span>
+              <span>
+                Open{' '}
+                <a
+                  href="chrome://extensions"
+                  onClick={(e) => {
+                    // chrome:// URLs can't be navigated from a webpage. Fall
+                    // back to copying the URL so the user can paste it.
+                    e.preventDefault();
+                    void navigator.clipboard.writeText('chrome://extensions').catch(() => {});
+                  }}
+                  className="text-[var(--color-accent)] hover:text-[var(--color-accent-deep)] hover:underline"
+                  title="Click to copy"
+                >
+                  <code className="kbd mx-0.5">chrome://extensions</code>
+                </a>{' '}
+                in a new tab
+              </span>
             </li>
             <li className="flex gap-2.5">
               <span className="mono text-[var(--color-text-tertiary)] tabular-nums flex-shrink-0">2.</span>
@@ -217,9 +257,25 @@ function ExtensionStep({ ready, onContinue }: { ready: boolean; onContinue: () =
             </li>
             <li className="flex gap-2.5">
               <span className="mono text-[var(--color-text-tertiary)] tabular-nums flex-shrink-0">4.</span>
-              <span>Select the <code className="kbd mx-0.5">extension</code> folder inside your inbox-app directory</span>
+              <span>Select this folder:</span>
             </li>
           </ol>
+          <div className="mt-2 ml-6 p-2.5 rounded-lg bg-[var(--color-surface-2)] flex items-center gap-2 max-w-full">
+            <code className="mono text-[12px] text-[var(--color-text-primary)] truncate flex-1">{EXTENSION_PATH}</code>
+            <button
+              onClick={copyPath}
+              className={cn(
+                'inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium flex-shrink-0',
+                copied
+                  ? 'bg-[var(--color-success)]/15 text-[var(--color-success)]'
+                  : 'bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-card-hover)]',
+              )}
+              style={{ transition: 'background-color 140ms var(--ease-out-quart), color 140ms var(--ease-out-quart)' }}
+            >
+              {copied ? <Check className="w-3 h-3" strokeWidth={3} /> : <Copy className="w-3 h-3" />}
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+          </div>
           <div className="mt-4 p-3 rounded-lg bg-[var(--color-accent-soft)] border border-[var(--color-accent)]/20 flex items-start gap-2.5">
             <AlertCircle className="w-3.5 h-3.5 text-[var(--color-accent)] flex-shrink-0 mt-0.5" />
             <p className="text-[11.5px] text-[var(--color-accent-fg)] leading-relaxed">
@@ -233,15 +289,62 @@ function ExtensionStep({ ready, onContinue }: { ready: boolean; onContinue: () =
 }
 
 function SignInStep({ extensionReady }: { extensionReady: boolean }) {
+  // Live progress from the extension bridge. We surface the latest progress
+  // message (e.g. "Fetched page 3 of 12"), the running sync result on
+  // completion, and any failure reason. The parent wizard auto-advances
+  // when conversations.length > 0, which loadFromServer triggers below.
+  const { loadFromServer } = useStore();
+  const [progress, setProgress] = useState<string | null>(null);
+  const [syncDone, setSyncDone] = useState<{ count: number; messageCount: number } | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
+
+  useEffect(() => {
+    function onMessage(ev: MessageEvent) {
+      if (ev.source !== window || !ev.data) return;
+      if (ev.data.type === 'inboxpro-refresh-progress' && typeof ev.data.message === 'string') {
+        setProgress(ev.data.message);
+        setSyncError(null);
+      }
+      if (ev.data.type === 'inboxpro-full-sync-result') {
+        const r = ev.data.response;
+        if (r?.ok) {
+          setSyncDone({ count: r.count ?? 0, messageCount: r.messageCount ?? 0 });
+          setProgress(null);
+          // Pull the freshly synced conversations into the store, which
+          // causes the parent wizard to auto-advance.
+          void loadFromServer();
+        } else {
+          setSyncError(r?.reason ?? 'Sync failed');
+          setProgress(null);
+        }
+        setStarting(false);
+      }
+    }
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [loadFromServer]);
+
+  function startSyncFromHere() {
+    if (!extensionReady) return;
+    setStarting(true);
+    setSyncError(null);
+    setProgress('Starting…');
+    window.postMessage({ type: 'inboxpro-full-sync-request' }, '*');
+  }
+
+  const syncing = starting || progress !== null;
+
   return (
     <div>
       <h2 className="text-[20px] font-semibold tracking-tight text-[var(--color-text-primary)]">
         Sign into LinkedIn and sync your inbox
       </h2>
       <p className="text-[13px] text-[var(--color-text-secondary)] mt-2 leading-relaxed">
-        Open LinkedIn messaging — a floating <strong className="text-[var(--color-text-primary)]">InboxPro sync button</strong> will
-        appear in the bottom-right corner. Click it to pull your full inbox.
-        For Sales Navigator, open <code className="kbd mx-0.5">linkedin.com/sales</code> and use the same button there.
+        Open LinkedIn messaging in a new tab, then come back here and click{' '}
+        <strong className="text-[var(--color-text-primary)]">Start sync</strong>.
+        For Sales Navigator, open <code className="kbd mx-0.5">linkedin.com/sales</code> too —
+        the same sync covers both.
       </p>
 
       <div className="mt-5 grid gap-3">
@@ -259,7 +362,7 @@ function SignInStep({ extensionReady }: { extensionReady: boolean }) {
             <p className="text-[13px] font-semibold text-[var(--color-text-primary)]">Open LinkedIn Messaging</p>
             <p className="text-[11.5px] text-[var(--color-text-tertiary)]">linkedin.com/messaging</p>
           </div>
-          <ArrowRight className="w-4 h-4 text-[var(--color-text-tertiary)]" />
+          <ExternalLink className="w-3.5 h-3.5 text-[var(--color-text-tertiary)]" />
         </a>
         <a
           href="https://www.linkedin.com/sales/home"
@@ -275,9 +378,63 @@ function SignInStep({ extensionReady }: { extensionReady: boolean }) {
             <p className="text-[13px] font-semibold text-[var(--color-text-primary)]">Open Sales Navigator</p>
             <p className="text-[11.5px] text-[var(--color-text-tertiary)]">linkedin.com/sales <span className="text-[var(--color-text-muted)]">— optional if you don't use SN</span></p>
           </div>
-          <ArrowRight className="w-4 h-4 text-[var(--color-text-tertiary)]" />
+          <ExternalLink className="w-3.5 h-3.5 text-[var(--color-text-tertiary)]" />
         </a>
       </div>
+
+      {/* Inline sync trigger so the user doesn't need to find the floating
+          button on LinkedIn. The extension picks this up regardless. */}
+      <button
+        onClick={startSyncFromHere}
+        disabled={!extensionReady || syncing}
+        className={cn(
+          'mt-4 w-full inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-[12.5px] font-semibold',
+          (!extensionReady || syncing)
+            ? 'bg-[var(--color-surface-2)] text-[var(--color-text-muted)] cursor-not-allowed'
+            : 'bg-[var(--color-accent-deep)] hover:bg-[var(--color-accent)] text-white active:scale-[0.97]',
+        )}
+        style={{ transition: 'background-color 140ms var(--ease-out-quart), transform 80ms var(--ease-out-quart)' }}
+      >
+        <RefreshCw className={cn('w-3.5 h-3.5', syncing && 'animate-spin')} />
+        {syncing ? 'Syncing…' : syncDone ? 'Re-sync' : 'Start sync'}
+      </button>
+
+      {/* Live progress card. The parent wizard auto-advances once
+          conversations.length > 0, so this is mostly a confidence builder. */}
+      {(syncing || syncDone || syncError) && (
+        <div
+          key={syncError ? 'err' : syncDone ? 'done' : 'in-progress'}
+          className={cn(
+            'mt-4 p-3 rounded-lg border flex items-start gap-2.5 view-fade-in',
+            syncError && 'bg-[var(--color-danger)]/10 border-[var(--color-danger)]/30',
+            !syncError && syncDone && 'bg-[var(--color-success)]/10 border-[var(--color-success)]/30',
+            !syncError && !syncDone && 'bg-[var(--color-accent-soft)] border-[var(--color-accent)]/20',
+          )}
+        >
+          {syncError ? (
+            <AlertCircle className="w-3.5 h-3.5 text-[var(--color-danger)] flex-shrink-0 mt-0.5" />
+          ) : syncDone ? (
+            <Check className="w-3.5 h-3.5 text-[var(--color-success)] flex-shrink-0 mt-0.5" strokeWidth={2.5} />
+          ) : (
+            <RefreshCw className="w-3.5 h-3.5 text-[var(--color-accent)] flex-shrink-0 mt-0.5 animate-spin" />
+          )}
+          <div className="flex-1 min-w-0">
+            {syncError ? (
+              <p className="text-[11.5px] text-[var(--color-danger)] leading-relaxed">{syncError}</p>
+            ) : syncDone ? (
+              <p className="text-[11.5px] text-[var(--color-text-primary)] leading-relaxed">
+                Loaded <strong>{syncDone.count}</strong> conversations · <strong>{syncDone.messageCount}</strong> messages.
+                Continuing automatically…
+              </p>
+            ) : (
+              <>
+                <p className="text-[11.5px] text-[var(--color-accent-fg)] leading-relaxed font-medium">{progress}</p>
+                <p className="text-[10.5px] text-[var(--color-accent-fg)]/70 mt-0.5">5–15 minutes for the first sync. Stay on this page.</p>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {!extensionReady && (
         <div className="mt-4 p-3 rounded-lg bg-[var(--color-danger)]/10 border border-[var(--color-danger)]/30 flex items-start gap-2.5">
@@ -294,24 +451,39 @@ function SignInStep({ extensionReady }: { extensionReady: boolean }) {
 function ImportStep() {
   const [status, setStatus] = useState<{ ok: boolean; msg: string } | null>(null);
   const [uploading, setUploading] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
+
+  // Cancel any in-flight upload when the user navigates away from this step
+  // (or the wizard unmounts) — prevents setState-on-unmounted warnings.
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   const onFile = useCallback(async (file: File) => {
+    abortRef.current?.abort();
+    const ac = new AbortController();
+    abortRef.current = ac;
+
     setUploading(true);
     setStatus(null);
     try {
       const fd = new FormData();
       fd.append('file', file);
-      const r = await fetch('/api/import/linkedin-connections', { method: 'POST', body: fd });
+      const r = await fetch('/api/import/linkedin-connections', {
+        method: 'POST',
+        body: fd,
+        signal: ac.signal,
+      });
       const d = await r.json();
+      if (ac.signal.aborted) return;
       if (r.ok) {
         setStatus({ ok: true, msg: `Matched ${d.matched ?? 0} of ${d.total ?? 0} contacts.` });
       } else {
         setStatus({ ok: false, msg: d.error ?? 'Import failed' });
       }
     } catch (e) {
+      if (ac.signal.aborted) return;
       setStatus({ ok: false, msg: e instanceof Error ? e.message : 'Import failed' });
     } finally {
-      setUploading(false);
+      if (!ac.signal.aborted) setUploading(false);
     }
   }, []);
 
@@ -383,11 +555,23 @@ function ImportStep() {
 
 function AiKeyStep() {
   const [key, setKey] = useState('');
-  const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  // Two-phase status: save the key first, then verify it works by pinging
+  // Anthropic with a 1-token Haiku call. The user sees clear stages instead
+  // of "Saved" against a key that actually fails on first use.
+  const [status, setStatus] = useState<'idle' | 'saving' | 'verifying' | 'verified' | 'error'>('idle');
   const [error, setError] = useState('');
+  const abortRef = useRef<AbortController | null>(null);
 
-  async function save() {
+  // Cancel any in-flight save/verify when the step unmounts so we don't
+  // poke state on a dead component.
+  useEffect(() => () => abortRef.current?.abort(), []);
+
+  async function saveAndVerify() {
     if (!key.trim()) return;
+    abortRef.current?.abort();
+    const ac = new AbortController();
+    abortRef.current = ac;
+
     setStatus('saving');
     setError('');
     try {
@@ -395,19 +579,46 @@ function AiKeyStep() {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ apiKey: key.trim() }),
+        signal: ac.signal,
       });
       const d = await r.json();
-      if (r.ok) {
-        setStatus('saved');
-      } else {
+      if (ac.signal.aborted) return;
+      if (!r.ok) {
         setStatus('error');
         setError(d.error ?? 'Failed to save key');
+        return;
       }
     } catch (e) {
+      if (ac.signal.aborted) return;
       setStatus('error');
       setError(e instanceof Error ? e.message : 'Failed');
+      return;
+    }
+
+    // Live verification — a 1-token Haiku ping confirms the key is real.
+    setStatus('verifying');
+    try {
+      const r = await fetch('/api/ai/key/verify', {
+        method: 'POST',
+        signal: ac.signal,
+      });
+      const d = await r.json();
+      if (ac.signal.aborted) return;
+      if (r.ok && d.ok) {
+        setStatus('verified');
+      } else {
+        setStatus('error');
+        setError(d.error ?? 'Key saved but Anthropic rejected it. Double-check the value.');
+      }
+    } catch (e) {
+      if (ac.signal.aborted) return;
+      setStatus('error');
+      setError(e instanceof Error ? e.message : 'Verification failed');
     }
   }
+
+  const busy = status === 'saving' || status === 'verifying';
+  const verified = status === 'verified';
 
   return (
     <div>
@@ -417,7 +628,7 @@ function AiKeyStep() {
       <p className="text-[13px] text-[var(--color-text-secondary)] mt-2 leading-relaxed">
         Add your Anthropic API key to unlock Draft Reply, Improve Draft, Smart Search,
         and auto-classification. Key stored locally in SQLite, never sent anywhere
-        except api.anthropic.com.
+        except api.anthropic.com. You can add this later in Settings.
       </p>
 
       <a
@@ -426,50 +637,87 @@ function AiKeyStep() {
         rel="noopener noreferrer"
         className="inline-flex items-center gap-1 mt-3 text-[12px] text-[var(--color-accent)] hover:text-[var(--color-accent-deep)] hover:underline"
       >
-        Get a key from console.anthropic.com <ArrowRight className="w-3 h-3" />
+        Get a key from console.anthropic.com <ExternalLink className="w-3 h-3" />
       </a>
 
       <div className="mt-4">
         <input
           type="password"
           value={key}
-          onChange={(e) => setKey(e.target.value)}
+          onChange={(e) => { setKey(e.target.value); if (status === 'error' || status === 'verified') setStatus('idle'); }}
           placeholder="sk-ant-…"
           className="input w-full mono"
-          onKeyDown={(e) => { if (e.key === 'Enter') save(); }}
+          onKeyDown={(e) => { if (e.key === 'Enter') saveAndVerify(); }}
+          disabled={busy || verified}
         />
         <button
-          onClick={save}
-          disabled={!key.trim() || status === 'saving'}
+          onClick={saveAndVerify}
+          disabled={!key.trim() || busy || verified}
           className={cn(
-            'mt-3 px-4 py-1.5 rounded-lg text-[12.5px] font-semibold',
-            key.trim() && status !== 'saving'
-              ? 'bg-[var(--color-accent-deep)] hover:bg-[var(--color-accent)] text-white'
-              : 'bg-[var(--color-surface-2)] text-[var(--color-text-muted)] cursor-not-allowed',
+            'mt-3 inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-[12.5px] font-semibold',
+            verified
+              ? 'bg-[var(--color-success)]/15 text-[var(--color-success)] cursor-default'
+              : key.trim() && !busy
+                ? 'bg-[var(--color-accent-deep)] hover:bg-[var(--color-accent)] text-white'
+                : 'bg-[var(--color-surface-2)] text-[var(--color-text-muted)] cursor-not-allowed',
           )}
           style={{ transition: 'background-color 140ms var(--ease-out-quart)' }}
         >
-          {status === 'saving' ? 'Saving…' : status === 'saved' ? 'Saved ✓' : 'Save key'}
+          {busy && <RefreshCw className="w-3 h-3 animate-spin" />}
+          {verified && <Check className="w-3 h-3" strokeWidth={3} />}
+          {status === 'saving' ? 'Saving…'
+            : status === 'verifying' ? 'Verifying…'
+            : verified ? 'Verified'
+            : 'Save & verify key'}
         </button>
-        {error && <p className="text-[12px] text-[var(--color-danger)] mt-2">{error}</p>}
+        {status === 'error' && <p className="text-[12px] text-[var(--color-danger)] mt-2">{error}</p>}
       </div>
     </div>
   );
 }
 
-function DoneStep() {
+function DoneStep({ onBackToSignIn }: { onBackToSignIn: () => void }) {
+  const { conversations } = useStore();
+  const count = conversations.length;
+  const empty = count === 0;
+
   return (
     <div className="text-center py-4">
-      <div className="w-16 h-16 rounded-full bg-[var(--color-success)]/10 flex items-center justify-center mx-auto mb-4">
-        <Check className="w-8 h-8 text-[var(--color-success)]" strokeWidth={2.5} />
+      <div className={cn(
+        'w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4',
+        empty ? 'bg-[var(--color-accent-soft)]' : 'bg-[var(--color-success)]/10',
+      )}>
+        {empty ? (
+          <AlertCircle className="w-8 h-8 text-[var(--color-accent)]" strokeWidth={2.5} />
+        ) : (
+          <Check className="w-8 h-8 text-[var(--color-success)]" strokeWidth={2.5} />
+        )}
       </div>
       <h2 className="text-[22px] font-semibold tracking-tight text-[var(--color-text-primary)]">
-        You're all set
+        {empty ? 'Ready when you are' : "You're all set"}
       </h2>
-      <p className="text-[13px] text-[var(--color-text-secondary)] mt-2 leading-relaxed max-w-[400px] mx-auto">
-        InboxPro will keep your inbox in sync automatically. Keep a LinkedIn or
-        Sales Nav tab open in this browser and new messages will land in real time.
-      </p>
+      {empty ? (
+        <>
+          <p className="text-[13px] text-[var(--color-text-secondary)] mt-2 leading-relaxed max-w-[400px] mx-auto">
+            Heads up — no conversations have synced yet. You can still open InboxPro
+            and sync from there, or go back and run sync now.
+          </p>
+          <button
+            onClick={onBackToSignIn}
+            className="mt-3 inline-flex items-center gap-1 text-[12px] font-medium text-[var(--color-accent)] hover:text-[var(--color-accent-deep)] hover:underline"
+          >
+            <ArrowLeft className="w-3 h-3" /> Back to Sign in
+          </button>
+        </>
+      ) : (
+        <>
+          <p className="text-[13px] text-[var(--color-text-secondary)] mt-2 leading-relaxed max-w-[400px] mx-auto">
+            <strong className="text-[var(--color-text-primary)]">{count.toLocaleString()}</strong>{' '}
+            conversation{count === 1 ? '' : 's'} synced. InboxPro will keep your inbox up to date
+            automatically — keep a LinkedIn or Sales Nav tab open and new messages land in real time.
+          </p>
+        </>
+      )}
     </div>
   );
 }

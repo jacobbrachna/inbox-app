@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { AuthState, Conversation, FilterView, Label, Message, Snippet, SyncStatus } from '@/types';
 import { filterConversations } from '@/lib/filter';
+import { storage } from '@/lib/storage';
+import { isExtensionReady } from '@/lib/use-extension-ready';
 
 // ─── Auth store ───────────────────────────────────────────────────────────────
 // Auth lives in localStorage so the user doesn't have to re-paste cookies on
@@ -20,7 +22,7 @@ interface AuthStore {
 // can see when LinkedIn rejects something.
 function fireMirror(kind: string, urn: string, value?: unknown) {
   try {
-    if (!document.getElementById('inboxpro-bridge-marker')) {
+    if (!isExtensionReady()) {
       console.warn('[InboxPro mirror] extension bridge not found — action not mirrored to LinkedIn:', kind);
       return;
     }
@@ -136,6 +138,16 @@ interface AppState {
   searchQuery: string;
   setSearchQuery: (q: string) => void;
 
+  // "Current role only" view toggle — hides threads whose entire activity
+  // predates the user's current employment start. Loaded from
+  // myEmploymentHistory via /api/patterns. Toggle state persisted in
+  // localStorage; the role-start date is server-derived.
+  currentRoleOnly: boolean;
+  setCurrentRoleOnly: (v: boolean) => void;
+  currentRoleStart: string | null; // ISO date
+  currentRoleLabel: string | null; // e.g. "Bedrock Data" — for the UI badge
+  setCurrentRoleMeta: (start: string | null, label: string | null) => void;
+
   // Labels
   labels: Label[];
   addLabel: (label: Label) => void;
@@ -244,7 +256,8 @@ export const useStore = create<AppState>()((set, get) => ({
   clearSelection: () => set({ selectedIds: new Set<string>() }),
   selectAll: () => {
     const s = get();
-    const visible = filterConversations(s.conversations, s.activeFilter, s.searchQuery);
+    const start = s.currentRoleOnly && s.currentRoleStart ? new Date(s.currentRoleStart) : null;
+    const visible = filterConversations(s.conversations, s.activeFilter, s.searchQuery, start);
     set({ selectedIds: new Set(visible.map((c) => c.id)) });
   },
   bulkUpdate: async (patch) => {
@@ -310,10 +323,28 @@ export const useStore = create<AppState>()((set, get) => ({
   searchQuery: '',
   setSearchQuery: (q) => set({ searchQuery: q }),
 
+  // Current-role toggle. Hydrated lazily — initial values from localStorage,
+  // server-side role start date populated by the sidebar via /api/patterns.
+  currentRoleOnly: storage.currentRoleOnly.get(),
+  setCurrentRoleOnly: (v) => {
+    storage.currentRoleOnly.set(v);
+    set({ currentRoleOnly: v });
+  },
+  currentRoleStart: null,
+  currentRoleLabel: null,
+  setCurrentRoleMeta: (start, label) => set({ currentRoleStart: start, currentRoleLabel: label }),
+
   // ─── Labels ─────────────────────────────────────────────────────────────────
   labels: [],
   addLabel: (label) => {
-    set((s) => ({ labels: [...s.labels, label] }));
+    // Upsert into the local store — replace if same id, else append.
+    set((s) => {
+      const idx = s.labels.findIndex((l) => l.id === label.id);
+      const next = s.labels.slice();
+      if (idx >= 0) next[idx] = label;
+      else next.push(label);
+      return { labels: next };
+    });
     fetch('/api/labels', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -321,7 +352,13 @@ export const useStore = create<AppState>()((set, get) => ({
     }).catch(() => {});
   },
   removeLabel: (id) => {
-    set((s) => ({ labels: s.labels.filter((l) => l.id !== id) }));
+    set((s) => ({
+      labels: s.labels.filter((l) => l.id !== id),
+      // Strip from local conversation labels so the chip disappears immediately
+      conversations: s.conversations.map((c) =>
+        c.labels.includes(id) ? { ...c, labels: c.labels.filter((l) => l !== id) } : c,
+      ),
+    }));
     fetch(`/api/labels/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {});
   },
 

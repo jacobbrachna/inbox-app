@@ -17,14 +17,29 @@ model Conversation {
   isStarred       Boolean  @default(false)
   snoozedUntil    DateTime?
   followUpAt      DateTime?
+  // followUpSource: 'manual' (user picked the date) | 'ai' (AI inferred from message).
+  // followUpReason: the phrase that triggered the AI detection (e.g., "follow up in September").
+  // followUpConfidence: legacy — kept for old rows; new code uses followUpKind.
+  // followUpKind: 'commitment' (explicit time-bound commitment, fires
+  //   desktop notifications) | 'soft' (mentioned future timing without
+  //   firm commitment, in-app surfacing only) | null (manual or no kind).
+  // followUpActor: 'self' (sender committed) | 'them' (recipient committed).
+  followUpSource     String?
+  followUpReason     String?
+  followUpConfidence String?
+  followUpKind       String?
+  followUpActor      String?
+  // needsReview: AI flagged this conversation as ambiguous to label. Surfaces
+  // in the Review queue for manual disposition. Set false again when user
+  // applies/dismisses labels manually.
+  needsReview     Boolean  @default(false)
   notes           String   @default("")
   labels          String   @default("[]") // JSON array of label IDs
   rawData         String?  // Raw LinkedIn response — future-proofing
-  // AI-derived fields. Populated by /api/ai/* routes, cached so we don't
-  // re-classify every render. aiCategory is one of:
-  //   cold-pitch | warm-lead | client | recruiter | spam | intro | other
-  aiCategory      String?
-  aiSummary       String?  // 1-sentence rolling summary of the thread
+  // AI-derived fields. Populated by /api/ai/classify, cached so we don't
+  // re-classify every render. Classification surface is the labels array
+  // (AI-managed Label rows). aiSummary is a 1-sentence rolling summary.
+  aiSummary       String?
   aiUpdatedAt     DateTime?
   // AI Outbound-Queue scoring — populated by /api/queue/score-batch.
   // priority: 0-100 (higher = more urgent for outbound work)
@@ -40,11 +55,103 @@ model Conversation {
   updatedAt       DateTime @updatedAt
 
   messages        Message[]
+  contacts        ConversationContact[]
 
   @@index([lastMessageAt])
   @@index([status])
   @@index([followUpAt])
-  @@index([aiCategory])
+}
+
+// Contact = a person we know about, independent of any specific conversation.
+// One Contact can be in many Conversations (and a Conversation can have many
+// Contacts for group threads). Identity resolution priority when matching:
+// linkedinUrn > profileSlug > normalized(name).
+model Contact {
+  id                String   @id @default(cuid())
+  linkedinUrn       String?  @unique
+  profileSlug       String?  @unique
+  profileUrl        String?
+  name              String
+  headline          String?
+  avatarUrl         String?
+  company           String?
+  companyDomain     String?
+  role              String?
+  location          String?
+  industry          String?
+  tenure            String?
+  // Source quality. Same precedence ladder as Conversation.enrichment:
+  //   linkedin-export > dom-capture > ai-headline > harvest
+  source            String?
+  firstSeenAt       DateTime @default(now())
+  lastSeenAt        DateTime @default(now())
+  // When the LinkedIn connection was actually established. From the CSV
+  // export's "Connected On" field. Null for harvest-only / pre-CSV contacts.
+  connectedOn       DateTime?
+  enrichmentAt      DateTime?
+  // Activity rollups — denormalized, updated when messages land. Computed
+  // across ALL conversations this contact appears in.
+  lastOutboundAt    DateTime?
+  lastInboundAt     DateTime?
+  outboundCount     Int      @default(0)
+  inboundCount      Int      @default(0)
+  conversationCount Int      @default(0)
+  // Per-person notes, separate from per-thread Conversation.notes.
+  notes             String   @default("")
+  // Expanded LinkedIn enrichment (Phase 2) — captured by extension when
+  // visiting a /in/* page. All optional.
+  about             String?  // LinkedIn "About" section text
+  prevRoles         String?  // JSON: Array<{role, company, from, to}>
+  education         String?  // JSON: Array<{school, degree, from, to}>
+  postsCount        Int?     // recent-activity signal
+  // Most recent N profile updates (posts + reshares) as JSON, plus when
+  // we fetched. Stale-by-design — refreshed on each enrich.
+  recentPosts       String?  // JSON: Array<{url, text, postedAt, kind}>
+  recentPostsAt     DateTime?
+  skills            String?  // JSON: string[]
+  // Reserved for Phase 3 ZoomInfo enrichment. JSON when populated.
+  zoominfoData      String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  conversations     ConversationContact[]
+  snapshots         ContactSnapshot[]
+
+  @@index([lastOutboundAt])
+  @@index([lastSeenAt])
+  @@index([company])
+}
+
+// ContactSnapshot = point-in-time capture of a contact's company/role/headline.
+// We write a new row whenever those fields change vs the latest snapshot.
+// Diffing snapshots is how the "Recently changed jobs" Tasks view detects
+// movement — comparing the two most recent snapshots per contact.
+model ContactSnapshot {
+  id            String   @id @default(cuid())
+  contactId     String
+  company       String?
+  companyDomain String?
+  role          String?
+  headline      String?
+  source        String?  // Same precedence ladder as Contact.source
+  capturedAt    DateTime @default(now())
+
+  contact       Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@index([contactId, capturedAt])
+  @@index([capturedAt])
+}
+
+// Join table for Conversation ↔ Contact. Many-to-many because group threads
+// have multiple participants. Cascade-delete from either side.
+model ConversationContact {
+  conversationId String
+  contactId      String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  contact        Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@id([conversationId, contactId])
+  @@index([contactId])
 }
 
 model Message {
@@ -56,16 +163,33 @@ model Message {
   sentAt          DateTime
   isFromMe        Boolean  @default(false)
   rawData         String?  // Raw LinkedIn message JSON
+  // Outcome tracking — populated for outbound (isFromMe=true) messages by
+  // a 14-day forward look at inbound replies in the same conversation.
+  // Powers the Phase 4 coach's "what's working" analysis.
+  gotReply        Boolean  @default(false)
+  replyAt         DateTime?
+  daysToReply     Int?     // capped integer; null when no reply
 
   conversation    Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   @@index([conversationId, sentAt])
+  @@index([isFromMe, gotReply])
 }
 
 model Label {
-  id    String @id
-  name  String
-  color String
+  id              String  @id
+  name            String
+  color           String
+  // description: plain-English instruction the AI reads to decide when to
+  // apply this label. Null = label is user-driven only (not AI-managed).
+  description     String?
+  // aiManaged: true = AI auto-applies this label as part of classify;
+  // false = manual-only (user clicks to add/remove).
+  aiManaged       Boolean @default(false)
+  // exclusiveGroup: labels with the same group key are mutually exclusive
+  // on a single conversation (e.g., "interest-state": Interested vs Not
+  // interested vs Ghosted). Null = no group → can co-exist with anything.
+  exclusiveGroup  String?
 }
 
 model Snippet {
@@ -88,4 +212,101 @@ model AppState {
   // by them. Used as a system-prompt anchor for Draft Reply so generated
   // drafts sound like them, not like ChatGPT.
   aiStyleNote       String?
+  // "Your context" block — injected into draft-reply / improve-draft /
+  // future coach so Claude knows who's sending and what they're offering.
+  // All optional; only populated fields make it into the prompt.
+  myCompany             String?  // e.g. "Bedrock Data"
+  myRole                String?  // e.g. "BDR"
+  companyOneLiner       String?  // 1-2 sentence company description
+  outreachGoal          String?  // e.g. "Book intro calls with data security leaders"
+  idealCustomerProfile  String?  // free text — titles, industries, size, painpoints
+  keyValueProps         String?  // free text — what we actually offer (3-5 bullets)
+  // The user's own LinkedIn slug — populated from a URL paste in Settings.
+  // Used to refresh employment history + auto-fill role/company/About from
+  // their own /in/ page via the same scraper that runs on contacts.
+  myProfileSlug         String?
+  // The user's employment history as captured from their LinkedIn profile.
+  // JSON: Array<{role, company, from, to}> — same shape as Contact.prevRoles.
+  // Drives "filter patterns to current role" in the Winning Patterns pipeline.
+  myEmploymentHistory   String?
+  // When we last refreshed the user's own profile from LinkedIn.
+  myProfileRefreshedAt  DateTime?
+}
+
+// User feedback on AI-set follow-ups. When the user clicks "wrong
+// follow-up" on a thread, we record the trigger phrase + reason here.
+// Future classify runs include recent feedback as a hint to suppress
+// similar phrasing — a lightweight reinforcement loop without a full
+// fine-tune pipeline.
+model FollowUpFeedback {
+  id              String   @id @default(cuid())
+  conversationId  String
+  phrase          String   // the text that triggered the false-positive follow-up
+  kind            String?  // 'commitment' | 'soft' | null
+  // Optional free-text "why was this wrong" if we add a prompt later;
+  // null today since the dismiss button is one-click.
+  reason          String?
+  createdAt       DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+// In-app notification (bell center + desktop alert source). Created by
+// server-side triggers (new inbound message, AI high-signal label, job
+// change, etc.). The UI polls /api/notifications to populate the bell.
+model Notification {
+  id              String   @id @default(cuid())
+  // Discriminator. Known: 'new-message', 'ai-signal', 'job-change',
+  // 'follow-up-due', 'system'. Free-form so we don't have to schema-bump
+  // for new event types.
+  kind            String
+  title           String
+  body            String
+  // Optional foreign references for click-to-navigate. Not declared as
+  // Prisma relations because we want orphan-safe deletes (deleting a
+  // conversation shouldn't cascade-wipe its history of notifications).
+  conversationId  String?
+  contactId       String?
+  // Inbox state. read = user has opened the panel and seen it. dismissed
+  // = user explicitly closed it. We keep dismissed rows for a short window
+  // before pruning so the user can scroll back through history if needed.
+  read            Boolean  @default(false)
+  dismissed       Boolean  @default(false)
+  // JSON for kind-specific payload (e.g. AI signal: { labelId, labelName }).
+  meta            String?
+  createdAt       DateTime @default(now())
+
+  @@index([read, createdAt])
+  @@index([conversationId])
+  @@index([createdAt])
+}
+
+// User-uploaded reference docs (whitepapers, ICP briefs, case studies, etc.).
+// Each doc is summarized by Claude on upload; the summary is what gets
+// injected into AI prompts. Full text stays in rawText for re-summarization
+// or future RAG. Local-only — single user, no auth.
+model Document {
+  id                String   @id @default(cuid())
+  title             String
+  // Free-form classifier so the user can group docs ("whitepaper", "ICP",
+  // "case-study", "objection-handling", "other"). UI offers presets but
+  // anything is accepted.
+  kind              String   @default("other")
+  // Full text content (for text-based uploads / paste). Null when the doc
+  // was uploaded as a PDF — those go directly to Claude as a document
+  // content block, and we keep only the resulting summary. Capped at ~200k
+  // chars server-side.
+  rawText           String?
+  // Claude-generated ~500-token brief. This is what goes into prompts.
+  summary           String?
+  // When true, this doc's summary is auto-injected into every draft prompt.
+  // Off by default — user opts in once they're confident the doc helps.
+  includeByDefault  Boolean  @default(true)
+  // Original filename + mime if uploaded as a file (vs pasted text).
+  sourceFilename    String?
+  sourceMime        String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([includeByDefault])
 }

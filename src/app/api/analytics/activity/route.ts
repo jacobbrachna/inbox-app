@@ -6,7 +6,7 @@ import { CORS, optionsResponse } from '@/lib/api-utils';
 //   • Reply rate (outbound msgs that got a response within REPLY_WINDOW days)
 //   • Avg response time (when they reply, how long after my msg)
 //   • Volume sent/received
-//   • Breakdown by aiCategory + by label
+//   • Reply rate by AI label
 // All computed from messages + conv data we already have. Defaults to last 30d.
 
 const REPLY_WINDOW_DAYS = 14;
@@ -14,7 +14,6 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 interface ConvWithMessages {
   id: string;
-  aiCategory: string | null;
   labels: string;
   messages: Array<{ sentAt: Date; isFromMe: boolean }>;
 }
@@ -32,7 +31,6 @@ export async function GET(req: NextRequest) {
   const allConvs: ConvWithMessages[] = await prisma.conversation.findMany({
     select: {
       id: true,
-      aiCategory: true,
       labels: true,
       messages: {
         select: { sentAt: true, isFromMe: true },
@@ -41,16 +39,30 @@ export async function GET(req: NextRequest) {
     },
   });
 
+  // Load AI-managed labels so we can resolve IDs → display names + colors.
+  const aiLabels = await prisma.label.findMany({
+    where: { aiManaged: true },
+    select: { id: true, name: true, color: true },
+  });
+  const labelMeta = new Map(aiLabels.map((l) => [l.id, l]));
+
   let outboundInRange = 0;
   let inboundInRange = 0;
   let outboundGotReply = 0;
   let totalResponseTimeMs = 0;
   let responseTimeSamples = 0;
 
-  // For per-category breakdowns we want: sent count + reply rate by category
-  const byCategory = new Map<string, { sent: number; replies: number }>();
+  // Per-label breakdowns. A conversation can have multiple labels; each
+  // outbound message increments counts for every AI-managed label on its
+  // parent conv. Conversations with no AI labels count toward "Unlabeled".
+  const byLabel = new Map<string, { sent: number; replies: number }>();
+  const UNLABELED = '__unlabeled__';
 
   for (const c of allConvs) {
+    let convLabelIds: string[];
+    try { convLabelIds = JSON.parse(c.labels); } catch { convLabelIds = []; }
+    const aiLabelIdsOnConv = convLabelIds.filter((id) => labelMeta.has(id));
+
     const msgs = c.messages;
     for (let i = 0; i < msgs.length; i++) {
       const m = msgs[i];
@@ -75,11 +87,13 @@ export async function GET(req: NextRequest) {
         }
         if (replied) outboundGotReply++;
 
-        const catKey = c.aiCategory ?? 'unclassified';
-        const cur = byCategory.get(catKey) ?? { sent: 0, replies: 0 };
-        cur.sent++;
-        if (replied) cur.replies++;
-        byCategory.set(catKey, cur);
+        const buckets = aiLabelIdsOnConv.length > 0 ? aiLabelIdsOnConv : [UNLABELED];
+        for (const id of buckets) {
+          const cur = byLabel.get(id) ?? { sent: 0, replies: 0 };
+          cur.sent++;
+          if (replied) cur.replies++;
+          byLabel.set(id, cur);
+        }
       } else {
         inboundInRange++;
       }
@@ -119,13 +133,18 @@ export async function GET(req: NextRequest) {
   const avgResponseTimeHours =
     responseTimeSamples > 0 ? totalResponseTimeMs / responseTimeSamples / (60 * 60 * 1000) : 0;
 
-  const byCategoryArr = Array.from(byCategory.entries())
-    .map(([category, v]) => ({
-      category,
-      sent: v.sent,
-      replies: v.replies,
-      replyRate: v.sent > 0 ? v.replies / v.sent : 0,
-    }))
+  const byLabelArr = Array.from(byLabel.entries())
+    .map(([labelId, v]) => {
+      const meta = labelMeta.get(labelId);
+      return {
+        labelId,
+        name: meta?.name ?? 'Unlabeled',
+        color: meta?.color ?? null,
+        sent: v.sent,
+        replies: v.replies,
+        replyRate: v.sent > 0 ? v.replies / v.sent : 0,
+      };
+    })
     .sort((a, b) => b.sent - a.sent);
 
   return NextResponse.json(
@@ -143,7 +162,7 @@ export async function GET(req: NextRequest) {
         replyRate,
         avgResponseTimeHours,
       },
-      byCategory: byCategoryArr,
+      byLabel: byLabelArr,
       queues: {
         hot: hot.slice(0, 50),
         goingCold: goingCold.slice(0, 50),

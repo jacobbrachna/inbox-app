@@ -55,3 +55,7 @@ captured-actions.log
 # debug sample captures — contain real LinkedIn data, never commit
 sn-samples/
 li-samples/
+
+# Local DB backups (created ad-hoc during migrations)
+backups/
+dev.db.backup-*

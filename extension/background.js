@@ -189,6 +189,125 @@ async function sendLinkedInMessage({ conversationUrn, body }) {
   }
 }
 
+// ── Create a NEW LinkedIn DM thread (1st-degree connections) ────────────────
+// Same createMessage action used for replies, but with hostRecipientUrns
+// instead of conversationUrn. LinkedIn auto-creates the conversation.
+async function createLinkedInThread({ recipientUrn, body }) {
+  const auth = await getLinkedInAuth();
+  if (!auth) return { ok: false, reason: 'not-logged-in' };
+  if (!recipientUrn) return { ok: false, reason: 'recipientUrn required' };
+  if (typeof body !== 'string' || body.length === 0) return { ok: false, reason: 'body required' };
+
+  let mailboxUrn = '';
+  try {
+    const sr = await fetch(`${INBOXPRO_URL}/api/state`);
+    if (sr.ok) mailboxUrn = (await sr.json()).myProfileUrn || '';
+  } catch {}
+  if (!mailboxUrn) return { ok: false, reason: 'no mailboxUrn — run a full sync first' };
+
+  const headers = { ...liHeaders(auth.csrf), 'content-type': 'application/json; charset=UTF-8' };
+
+  const originToken = crypto.randomUUID
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+  // Recipient URN must be fsd_profile-shaped (urn:li:fsd_profile:XXX).
+  // sendLinkedInMessage payload re-used with hostRecipientUrns added.
+  const payload = {
+    message: {
+      body: { attributes: [], text: body },
+      renderContentUnions: [],
+      originToken,
+    },
+    mailboxUrn,
+    trackingId: originToken.slice(0, 16),
+    dedupeByClientGeneratedToken: false,
+    hostRecipientUrns: [recipientUrn],
+  };
+
+  const url = 'https://www.linkedin.com/voyager/api/voyagerMessagingDashMessengerMessages?action=createMessage';
+
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify(payload),
+    });
+    const responseText = await r.text().catch(() => '');
+    syncLog('li.newThread.result', {
+      ok: r.ok, status: r.status,
+      recipient: recipientUrn.slice(-20),
+      bodyLen: body.length,
+      response: responseText.slice(0, 300),
+    });
+    if (!r.ok) {
+      return { ok: false, reason: `LinkedIn returned HTTP ${r.status}`, status: r.status, debugBody: responseText.slice(0, 500) };
+    }
+    // Trigger a sync so the new conversation lands in the DB.
+    backgroundSync({ broadcastProgress: false }).catch(() => {});
+    return { ok: true, status: r.status, response: responseText.slice(0, 300) };
+  } catch (e) {
+    return { ok: false, reason: e?.message || 'send threw' };
+  }
+}
+
+// ── Create a NEW Sales Navigator message thread ─────────────────────────────
+// SN's createMessage action accepts `recipients` array when no threadId is
+// given — SN auto-creates the thread. Subject is optional: InboxPro targets
+// messaging existing connections (where SN treats sends as regular DMs),
+// so we omit it unless the caller explicitly passes one.
+async function createSnInMail({ recipientUrn, subject, body }) {
+  const auth = await getLinkedInAuth();
+  if (!auth) return { ok: false, reason: 'not-logged-in' };
+  if (!recipientUrn) return { ok: false, reason: 'recipientUrn required' };
+  if (typeof body !== 'string' || body.length === 0) return { ok: false, reason: 'body required' };
+
+  // 16 random bytes → Latin-1 string
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  let trackingId = '';
+  for (let i = 0; i < bytes.length; i++) trackingId += String.fromCharCode(bytes[i]);
+
+  // SN expects sales-flavored fsd profile URN. Most contacts only carry the
+  // fsd_profile URN; SN's API accepts that form too.
+  const payload = {
+    createMessageRequest: {
+      body,
+      ...(subject && subject.trim() ? { subject: subject.trim() } : {}),
+      trackingId,
+      copyToCrm: false,
+      recipients: [recipientUrn],
+    },
+  };
+
+  const url = 'https://www.linkedin.com/sales-api/salesApiMessageActions?action=createMessage';
+  const headers = { ...snHeaders(auth.csrf), 'content-type': 'application/json; charset=UTF-8' };
+
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify(payload),
+    });
+    const responseText = await r.text().catch(() => '');
+    syncLog('sn.newInMail.result', {
+      ok: r.ok, status: r.status,
+      recipient: recipientUrn.slice(-20),
+      bodyLen: body.length,
+      response: responseText.slice(0, 300),
+    });
+    if (!r.ok) {
+      return { ok: false, reason: `SN returned HTTP ${r.status}`, status: r.status, debugBody: responseText.slice(0, 500) };
+    }
+    // Trigger SN sync so the new thread shows up locally.
+    snBackgroundSync().catch(() => {});
+    return { ok: true, status: r.status, response: responseText.slice(0, 300) };
+  } catch (e) {
+    return { ok: false, reason: e?.message || 'send threw' };
+  }
+}
+
 // ── LinkedIn typing indicator ─────────────────────────────────────────────────
 // Fire-and-forget POST per typing burst. LinkedIn shows the indicator on the
 // recipient side for ~5s after each request, so the UI debounces a fire every
@@ -714,76 +833,158 @@ async function mirrorToLinkedIn({ kind, urn, value }) {
 // `data` + `included[]` arrays. The `included[]` array carries profile,
 // position, education entities tagged by $type. We walk them and extract the
 // fields we want.
+// Maps tabId → resolver function. Used by enrichLinkedInProfile to wait
+// for an early "capture complete" signal from profile-capture.js.
+const captureCompleteResolvers = new Map();
+
+// Tabs the app explicitly opened to capture a profile. profile-capture.js
+// and content.js (SDUI intercept) query this to decide whether to run the
+// full auto-capture flow (app-initiated) vs. respect natural-browse rules
+// (no banner, no silent POST unless contact is already messageable).
+const appInitiatedTabs = new Set();
+
+// Cleanup: drop the tab from the set when it closes. Otherwise stale tabIds
+// could accidentally match a new tab Chrome later reuses the ID for.
+chrome.tabs.onRemoved.addListener((tabId) => {
+  appInitiatedTabs.delete(tabId);
+  captureCompleteResolvers.delete(tabId);
+});
+
+// Enrich a contact by opening their LinkedIn profile in a hidden tab so
+// LinkedIn's own UI fires the Voyager profile/feed calls. Our injected.js
+// intercepts those responses (real-page context, so LinkedIn allows them)
+// and content.js forwards them to /api/profile-capture/voyager-tap.
+//
+// Calling Voyager directly from this background worker doesn't work in
+// practice — LinkedIn returns 403/410 because the request lacks page-origin
+// context. Hidden-tab → intercept is the reliable path.
 async function enrichLinkedInProfile({ profileUrn, profileUrl }) {
   const auth = await getLinkedInAuth();
   if (!auth) return { ok: false, reason: 'not-logged-in' };
 
-  let pageUrl = profileUrl;
-  let extra = {};
-
-  if (!pageUrl) {
-    if (!profileUrn) return { ok: false, reason: 'no profile URL or URN' };
-    // Try Voyager API endpoints that return publicIdentifier + basic fields.
-    // We try in order; first 200 with parseable JSON wins.
-    const memberIdMatch = profileUrn.match(/fsd_profile:([A-Za-z0-9_-]+)/) || profileUrn.match(/:([A-Za-z0-9_-]+)$/);
-    const memberId = memberIdMatch ? memberIdMatch[1] : profileUrn;
-    const headers = { ...liHeaders(auth.csrf) };
-
-    const candidates = [
-      // GraphQL-shaped Dash endpoint — most current
-      `https://www.linkedin.com/voyager/api/voyagerIdentityDashProfiles?q=memberIdentity&memberIdentity=${encodeURIComponent(profileUrn)}&decorationId=com.linkedin.voyager.dash.deco.identity.profile.WebTopCardCore-12`,
-      // Older REST endpoint
-      `https://www.linkedin.com/voyager/api/identity/profiles/${encodeURIComponent(memberId)}`,
-      // Older profileView (rich)
-      `https://www.linkedin.com/voyager/api/identity/profiles/${encodeURIComponent(memberId)}/profileView`,
-    ];
-
-    let lastStatus = 0;
-    let lastBody = '';
-    for (const url of candidates) {
-      try {
-        const r = await fetch(url, { headers, credentials: 'include' });
-        lastStatus = r.status;
-        if (!r.ok) {
-          syncLog('enrich.apiAttempt', { status: r.status, url: url.slice(-80) });
-          continue;
-        }
-        const json = await r.json();
-        const result = extractFromVoyager(json);
-        if (result.publicIdentifier) {
-          pageUrl = `https://www.linkedin.com/in/${result.publicIdentifier}/`;
-          extra = result;
-          syncLog('enrich.apiOk', { url: url.slice(-80), fields: Object.keys(result).join(',') });
-          break;
-        } else {
-          // Capture a tiny sample so we can adapt the extractor
-          lastBody = JSON.stringify(json).slice(0, 400);
-          syncLog('enrich.apiNoSlug', { url: url.slice(-80), bodyHead: lastBody.slice(0, 200) });
-        }
-      } catch (e) {
-        syncLog('enrich.apiErr', { url: url.slice(-80), err: e?.message });
-      }
+  // For Sales-Nav-only contacts (no LinkedIn profileUrl), we can't enrich
+  // via Voyager. The user would have to visit them on regular LinkedIn first.
+  if (!profileUrl) {
+    if (!profileUrn || profileUrn.startsWith('sn:')) {
+      return { ok: false, reason: 'No regular-LinkedIn URL for this contact. Visit them on linkedin.com once and try again.' };
     }
+    // Fall back to a best-effort URL constructed from publicIdentifier if we
+    // can derive one. Most contacts hit the early-return above.
+    return { ok: false, reason: 'No profile URL — open them on LinkedIn once to capture the URL.' };
+  }
 
-    if (!pageUrl) {
-      return {
-        ok: false,
-        reason: `couldn't resolve URN via Voyager API (last status ${lastStatus}). LinkedIn locks these endpoints down — open the contact in LinkedIn once and the URL will be captured passively.`,
-      };
+  // IMPORTANT: must open as ACTIVE. Hidden tabs don't run LinkedIn's React.
+  let tab;
+  try {
+    tab = await chrome.tabs.create({ url: profileUrl, active: true });
+    // Mark this tab as app-initiated so the content scripts know they have
+    // explicit consent to run the auto-capture flow (banner + scrape + POST).
+    appInitiatedTabs.add(tab.id);
+    await waitForTabComplete(tab.id, 25_000);
+    // Race: 18s safety timeout OR explicit captureComplete signal from
+    // profile-capture.js. Whichever fires first wins. Close-on-capture
+    // means the user gets back to their previous tab faster.
+    const tabId = tab.id;
+    await new Promise((resolve) => {
+      const timeout = setTimeout(resolve, 18_000);
+      captureCompleteResolvers.set(tabId, () => {
+        clearTimeout(timeout);
+        captureCompleteResolvers.delete(tabId);
+        resolve();
+      });
+    });
+  } catch (e) {
+    return { ok: false, reason: `couldn't open profile tab: ${e?.message || 'unknown'}` };
+  } finally {
+    if (tab?.id) {
+      captureCompleteResolvers.delete(tab.id);
+      try { await chrome.tabs.remove(tab.id); } catch {}
     }
   }
 
-  return { ok: true, enrichment: { profileUrl: pageUrl, ...extra } };
+  // The intercept path writes directly to the Contact/Conversation rows
+  // via the server. We return enough for the client to know it landed; the
+  // client's loadFromServer() will refresh and pull the new rich data.
+  return { ok: true, enrichment: { profileUrl }, viaIntercept: true };
 }
 
-// Pull publicIdentifier + role/company/location from any of the Voyager
-// profile JSON shapes. Walks `included[]` (Dash format) or top-level fields
-// (REST format).
+// Fetch the last ~10 profile updates (posts + reshares) for a contact via
+// the Voyager Dash feed endpoint. Returns a normalized array; empty when
+// the response shape doesn't match expectations (graceful drift handling).
+async function fetchRecentPosts(profileUrn, auth) {
+  const headers = liHeaders(auth.csrf);
+  // LinkedIn's Voyager feed endpoint has changed param shape several times.
+  // Try a couple of formats — return the first one that comes back 200.
+  const candidates = [
+    // Newer Dash GraphQL endpoint (graphql interface)
+    `https://www.linkedin.com/voyager/api/graphql?variables=(count:10,start:0,profileUrn:${encodeURIComponent(profileUrn)})&queryId=voyagerFeedDashProfileUpdates.7ff8b842b6f8d4ce5a99c0baef4d3bf2`,
+    // Profile-updates with rest-li tuple syntax
+    `https://www.linkedin.com/voyager/api/identity/profileUpdatesV2?count=10&start=0&q=memberShareFeed&profileId=${encodeURIComponent(profileUrn.replace(/^.*:/, ''))}`,
+    // Original shape (was returning 400)
+    `https://www.linkedin.com/voyager/api/voyagerFeedDashProfileUpdates?q=memberShareFeed&moduleKey=member-shares%3Aphone&count=10&start=0&profileUrn=${encodeURIComponent(profileUrn)}`,
+  ];
+
+  let lastStatus = 0;
+  let json = null;
+  for (const url of candidates) {
+    try {
+      const r = await fetch(url, { headers, credentials: 'include' });
+      lastStatus = r.status;
+      if (!r.ok) continue;
+      json = await r.json().catch(() => null);
+      if (json) break;
+    } catch (e) {
+      syncLog('enrich.postsCandErr', { err: e?.message });
+    }
+  }
+  if (!json) {
+    syncLog('enrich.postsHttp', { status: lastStatus });
+    return [];
+  }
+
+  // Defensive extraction — try multiple shapes.
+  const elements = Array.isArray(json?.data?.elements)
+    ? json.data.elements
+    : Array.isArray(json?.elements)
+    ? json.elements
+    : Array.isArray(json?.data?.feedDashProfileUpdatesByMemberShareFeed?.elements)
+    ? json.data.feedDashProfileUpdatesByMemberShareFeed.elements
+    : [];
+
+  const posts = [];
+  for (const el of elements) {
+    if (posts.length >= 5) break;
+    const commentary = el?.commentary?.text?.text
+      ?? el?.commentary?.text
+      ?? (typeof el?.commentary === 'string' ? el.commentary : null);
+    const text = typeof commentary === 'string' ? commentary.slice(0, 600) : null;
+    const ms = typeof el?.created?.time === 'number' ? el.created.time : null;
+    const postedAt = ms ? new Date(ms).toISOString() : null;
+    const backendUrn = typeof el?.preDashUpdateUrn === 'string'
+      ? el.preDashUpdateUrn
+      : (typeof el?.updateMetadata?.urn === 'string' ? el.updateMetadata.urn : null);
+    const postUrl = backendUrn
+      ? `https://www.linkedin.com/feed/update/${encodeURIComponent(backendUrn)}`
+      : null;
+    const kind = el?.resharedUpdate ? 'reshare' : 'post';
+    if (text || postUrl) {
+      posts.push({ url: postUrl, text, postedAt, kind });
+    }
+  }
+  return posts;
+}
+
+// Pull profile data from any of the Voyager profile JSON shapes. Walks
+// `included[]` (Dash format) or top-level fields (REST format). Defensive:
+// missing fields are simply absent in the result. Returns:
+//   { publicIdentifier, headline, location, industry, role, company,
+//     about, prevRoles[], education[], skills[] }
 function extractFromVoyager(json) {
   const out = {};
   // Dash response: { data: {...}, included: [...] }
   const included = Array.isArray(json?.included) ? json.included : [];
-  // The viewed profile entity will have publicIdentifier
+
+  // Profile entity — has publicIdentifier + headline + about ("summary")
   const profileEntity = included.find((x) => typeof x?.publicIdentifier === 'string')
     || (typeof json?.publicIdentifier === 'string' ? json : null);
   if (profileEntity) {
@@ -792,6 +993,10 @@ function extractFromVoyager(json) {
     if (typeof profileEntity.geoLocationName === 'string') out.location = profileEntity.geoLocationName;
     else if (typeof profileEntity.locationName === 'string') out.location = profileEntity.locationName;
     if (typeof profileEntity.industryName === 'string') out.industry = profileEntity.industryName;
+    // "About" section is in `summary` on both Dash and REST profile entities
+    if (typeof profileEntity.summary === 'string' && profileEntity.summary.length > 0) {
+      out.about = profileEntity.summary;
+    }
   }
 
   // REST profileView shape: { profile: {...}, positionView: { elements: [...] }, ... }
@@ -804,15 +1009,74 @@ function extractFromVoyager(json) {
     if (typeof root.headline === 'string' && !out.headline) out.headline = root.headline;
     if (typeof root.locationName === 'string' && !out.location) out.location = root.locationName;
     if (typeof root.industryName === 'string' && !out.industry) out.industry = root.industryName;
+    if (typeof root.summary === 'string' && !out.about) out.about = root.summary;
   }
 
-  // Positions (REST shape)
-  const positions = json?.positionView?.elements || [];
-  const current = positions.find((p) => p?.timePeriod && !p.timePeriod.endDate) || positions[0];
-  if (current) {
-    if (typeof current.title === 'string') out.role = current.title;
-    if (typeof current.companyName === 'string') out.company = current.companyName;
+  // Positions — REST shape lives under positionView.elements; Dash shape has
+  // Position entries inside included[] keyed by $type.
+  const restPositions = json?.positionView?.elements || [];
+  const dashPositions = included.filter((x) => {
+    const t = x?.$type;
+    return typeof t === 'string' && /Position$/.test(t);
+  });
+  const allPositions = [...restPositions, ...dashPositions];
+
+  function fmtDate(d) {
+    if (!d) return null;
+    if (typeof d === 'string') return d;
+    if (typeof d.year === 'number') {
+      return d.month ? `${d.year}-${String(d.month).padStart(2, '0')}` : String(d.year);
+    }
+    return null;
   }
+
+  const positions = allPositions.map((p) => {
+    const role = typeof p?.title === 'string' ? p.title : (typeof p?.titleName === 'string' ? p.titleName : null);
+    const company = typeof p?.companyName === 'string'
+      ? p.companyName
+      : (typeof p?.company === 'string' ? p.company : (typeof p?.companyUrn === 'string' ? null : null));
+    const from = fmtDate(p?.timePeriod?.startDate ?? p?.dateRange?.start ?? p?.startedOn);
+    const to = fmtDate(p?.timePeriod?.endDate ?? p?.dateRange?.end ?? p?.endedOn);
+    const isCurrent = !to;
+    return { role, company, from, to, isCurrent };
+  }).filter((p) => p.role || p.company);
+
+  if (positions.length > 0) {
+    const current = positions.find((p) => p.isCurrent) ?? positions[0];
+    if (current.role) out.role = current.role;
+    if (current.company) out.company = current.company;
+    // prevRoles: every position EXCEPT the current one (or all-but-first if no
+    // current marker). Trim to 5 most recent.
+    const prev = positions.filter((p) => p !== current).slice(0, 5);
+    if (prev.length > 0) out.prevRoles = prev.map(({ isCurrent: _, ...rest }) => rest);
+  }
+
+  // Education — both REST (educationView.elements) and Dash (Education entries)
+  const restEdu = json?.educationView?.elements || [];
+  const dashEdu = included.filter((x) => {
+    const t = x?.$type;
+    return typeof t === 'string' && /Education$/.test(t);
+  });
+  const allEdu = [...restEdu, ...dashEdu];
+  const education = allEdu.map((e) => ({
+    school: typeof e?.schoolName === 'string' ? e.schoolName : (typeof e?.school?.name === 'string' ? e.school.name : null),
+    degree: typeof e?.degreeName === 'string' ? e.degreeName : (typeof e?.fieldOfStudy === 'string' ? e.fieldOfStudy : null),
+    from: fmtDate(e?.timePeriod?.startDate ?? e?.dateRange?.start),
+    to: fmtDate(e?.timePeriod?.endDate ?? e?.dateRange?.end),
+  })).filter((e) => e.school);
+  if (education.length > 0) out.education = education.slice(0, 5);
+
+  // Skills — both REST and Dash
+  const restSkills = json?.skillView?.elements || [];
+  const dashSkills = included.filter((x) => {
+    const t = x?.$type;
+    return typeof t === 'string' && /Skill$/.test(t);
+  });
+  const skills = [...restSkills, ...dashSkills]
+    .map((s) => typeof s?.name === 'string' ? s.name : null)
+    .filter((s) => !!s)
+    .slice(0, 10);
+  if (skills.length > 0) out.skills = skills;
 
   return out;
 }
@@ -1568,15 +1832,21 @@ const ALARM_NAME = 'inboxpro-background-sync';
 const ENRICH_ALARM = 'inboxpro-profile-enrich';
 // Sales Navigator inbox refresh — hits SN's API directly, no SN tab needed.
 const SN_ALARM = 'inboxpro-sn-sync';
+// Daily parser-health check — alerts the user when LinkedIn's response
+// shape drifts under our scrapers (success rate cratering on any source).
+const PARSER_HEALTH_ALARM = 'inboxpro-parser-health';
+const PARSER_HEALTH_PERIOD_MIN = 24 * 60; // 1 day
 chrome.runtime.onInstalled.addListener(() => {
   chrome.alarms.create(ALARM_NAME, { periodInMinutes: 5 });
   chrome.alarms.create(ENRICH_ALARM, { periodInMinutes: 15 });
   chrome.alarms.create(SN_ALARM, { delayInMinutes: 0.1, periodInMinutes: 3 });
+  chrome.alarms.create(PARSER_HEALTH_ALARM, { delayInMinutes: 5, periodInMinutes: PARSER_HEALTH_PERIOD_MIN });
 });
 chrome.runtime.onStartup.addListener(() => {
   chrome.alarms.create(ALARM_NAME, { periodInMinutes: 5 });
   chrome.alarms.create(ENRICH_ALARM, { periodInMinutes: 15 });
   chrome.alarms.create(SN_ALARM, { delayInMinutes: 0.1, periodInMinutes: 3 });
+  chrome.alarms.create(PARSER_HEALTH_ALARM, { delayInMinutes: 5, periodInMinutes: PARSER_HEALTH_PERIOD_MIN });
 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === ALARM_NAME) {
@@ -1594,8 +1864,58 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     snBackgroundSync().catch((e) => {
       syncLog('snAlarm.error', { err: e?.message });
     });
+  } else if (alarm.name === PARSER_HEALTH_ALARM) {
+    syncLog('alarm.fire', { name: alarm.name });
+    checkParserHealth().catch((e) => {
+      syncLog('parserHealth.error', { err: e?.message });
+    });
   }
 });
+
+// Per source, alert when success rate over the last 24h drops below the
+// threshold AND we have enough samples to trust the signal. Saves last-fired
+// timestamp per source so we don't re-notify on every daily tick when an
+// issue lingers — only refire once per week per source.
+const PARSER_HEALTH_THRESHOLD = 0.80;
+const PARSER_HEALTH_MIN_SAMPLES = 10;
+const PARSER_HEALTH_REFIRE_HOURS = 24 * 7;
+
+async function checkParserHealth() {
+  let res;
+  try {
+    res = await fetch(`${INBOXPRO_URL}/api/parser-health?windowHours=24`);
+  } catch (e) {
+    syncLog('parserHealth.fetchFail', { err: e?.message });
+    return;
+  }
+  if (!res.ok) {
+    syncLog('parserHealth.badStatus', { status: res.status });
+    return;
+  }
+  const data = await res.json();
+  const sources = Array.isArray(data?.sources) ? data.sources : [];
+  const stored = await chrome.storage.local.get('parserHealthLastFiredAt');
+  const lastFiredMap = stored.parserHealthLastFiredAt || {};
+  const now = Date.now();
+  const refireMs = PARSER_HEALTH_REFIRE_HOURS * 3600 * 1000;
+  let firedAny = false;
+  for (const s of sources) {
+    if (typeof s.rate !== 'number') continue;
+    if (s.samples24h < PARSER_HEALTH_MIN_SAMPLES) continue;
+    if (s.rate >= PARSER_HEALTH_THRESHOLD) continue;
+    const last = lastFiredMap[s.source];
+    if (typeof last === 'number' && now - last < refireMs) continue;
+    const pct = Math.round(s.rate * 100);
+    showNotification({
+      title: 'InboxPro: parser health degraded',
+      body: `${s.source} success rate ${pct}% over the last 24h. LinkedIn may have changed its shape — check Diagnostics → Parser health.`,
+    });
+    lastFiredMap[s.source] = now;
+    firedAny = true;
+    syncLog('parserHealth.alerted', { source: s.source, rate: s.rate, samples24h: s.samples24h });
+  }
+  if (firedAny) await chrome.storage.local.set({ parserHealthLastFiredAt: lastFiredMap });
+}
 
 // ── SN background sync ─────────────────────────────────────────────────────
 // Fetches SN inbox first page (most recent 20 threads) and feeds to the parser.
@@ -1718,6 +2038,15 @@ async function processProfileEnrichmentQueue() {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Content scripts ask this at page load to decide whether to auto-capture
+  // (app-initiated tabs) or just show the "Import to InboxPro" floating
+  // button + skip silent POSTs.
+  if (message.action === 'is-app-initiated') {
+    const tabId = sender.tab?.id;
+    const initiated = typeof tabId === 'number' && appInitiatedTabs.has(tabId);
+    sendResponse({ initiated });
+    return false;
+  }
   if (message.action === 'openApp') {
     (async () => {
       const ok = await pushToApp({
@@ -1996,6 +2325,71 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })();
     return true;
   }
+  // profile-capture.js signals it's done extracting → resolve any waiting
+  // enrich call so the tab closes early instead of waiting the full 18s.
+  if (message.action === 'captureComplete') {
+    const tabId = sender?.tab?.id;
+    if (tabId != null) {
+      const resolver = captureCompleteResolvers.get(tabId);
+      if (resolver) resolver();
+    }
+    sendResponse({ ok: true });
+    return false;
+  }
+
+  // Passive profile tap — content.js forwards intercepted Voyager profile
+  // responses; we parse with extractFromVoyager and POST to the server.
+  if (message.action === 'voyagerProfileTap') {
+    (async () => {
+      try {
+        const json = JSON.parse(message.body);
+        const fields = extractFromVoyager(json);
+        if (!fields.publicIdentifier) {
+          sendResponse({ ok: false, reason: 'no publicIdentifier' });
+          return;
+        }
+        const r = await fetch(`${INBOXPRO_URL}/api/profile-capture/voyager-tap`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fields }),
+        });
+        const data = await r.json().catch(() => ({}));
+        sendResponse({ ok: r.ok, ...data });
+      } catch (e) {
+        sendResponse({ ok: false, reason: e?.message || 'tap failed' });
+      }
+    })();
+    return true;
+  }
+
+  // New-thread send (LinkedIn DM or SN InMail). Triggered by the composer
+  // modal in the app via bridge.js postMessage.
+  if (message.action === 'createNewThread') {
+    (async () => {
+      try {
+        let result;
+        if (message.channel === 'linkedin') {
+          result = await createLinkedInThread({
+            recipientUrn: message.recipientUrn,
+            body: message.body,
+          });
+        } else if (message.channel === 'sn') {
+          result = await createSnInMail({
+            recipientUrn: message.recipientUrn,
+            subject: message.subject,
+            body: message.body,
+          });
+        } else {
+          result = { ok: false, reason: `unknown channel: ${message.channel}` };
+        }
+        sendResponse(result);
+      } catch (e) {
+        sendResponse({ ok: false, reason: e?.message || 'unknown failure' });
+      }
+    })();
+    return true;
+  }
+
   // Realtime push: content.js captured new data from a LinkedIn fetch and just
   // POSTed it to /api/import. We just need to tell every InboxPro tab so it
   // refreshes the affected thread.

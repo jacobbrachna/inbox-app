@@ -2,8 +2,8 @@
 import { useEffect, useState } from 'react';
 import { Check } from 'lucide-react';
 import { cn } from '@/lib/cn';
+import { storage } from '@/lib/storage';
 
-const STORAGE_KEY = 'inbox-accent-rgb';
 const DEFAULT_RGB = '37, 99, 235';
 
 const PRESETS: { name: string; rgb: string }[] = [
@@ -44,15 +44,13 @@ export function AccentPicker() {
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        setCurrent(saved);
-        setHex(rgbToHex(saved));
-      } else {
-        setHex(rgbToHex(DEFAULT_RGB));
-      }
-    } catch {}
+    const saved = storage.accentRgb.get();
+    if (saved) {
+      setCurrent(saved);
+      setHex(rgbToHex(saved));
+    } else {
+      setHex(rgbToHex(DEFAULT_RGB));
+    }
     setMounted(true);
   }, []);
 
@@ -60,7 +58,7 @@ export function AccentPicker() {
     setCurrent(rgb);
     setHex(rgbToHex(rgb));
     applyAccent(rgb);
-    try { localStorage.setItem(STORAGE_KEY, rgb); } catch {}
+    storage.accentRgb.set(rgb);
   }
 
   function onHexChange(value: string) {

@@ -8,9 +8,13 @@ import { QueuePanel } from '@/components/queue/queue-panel';
 import { SettingsPanel } from '@/components/compose/settings-panel';
 import { AnalyticsPanel } from '@/components/analytics/analytics-panel';
 import { DiagnosticsPanel } from '@/components/diagnostics/diagnostics-panel';
+import { ContactsPanel } from '@/components/contacts/contacts-panel';
+import { TasksPanel } from '@/components/tasks/tasks-panel';
+import { ReviewPanel } from '@/components/review/review-panel';
 import { WelcomePanel } from '@/components/welcome/welcome-panel';
 import { OnboardingWizard } from '@/components/welcome/onboarding-wizard';
 import { useStore } from '@/store';
+import { storage } from '@/lib/storage';
 
 export default function Home() {
   const {
@@ -56,6 +60,47 @@ export default function Home() {
     const stop = startAutoRefresh();
     return stop;
   }, [startAutoRefresh]);
+
+  // Auto-classify trickle: every 5 min, fire-and-forget classify the
+  // SMALL backlog of unclassified threads (cap 25). Skips bulk backfill —
+  // user has to use Diagnostics for a full pass. Keeps fresh conversations
+  // labeled within minutes of arrival without surprise spend.
+  useEffect(() => {
+    const AUTO_CHUNK = 25;
+    let running = false;
+    async function trickle() {
+      if (running) return;
+      try {
+        const cr = await fetch('/api/ai/classify-all');
+        if (!cr.ok) return;
+        const counts = await cr.json();
+        const pending = counts?.pending ?? 0;
+        if (pending === 0 || pending > AUTO_CHUNK) return; // skip if too many to be a trickle
+        running = true;
+        const list = await fetch('/api/ai/classify-all', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ limit: AUTO_CHUNK }),
+        }).then((r) => (r.ok ? r.json() : null));
+        const ids = list?.ids ?? [];
+        if (ids.length === 0) return;
+        await fetch('/api/ai/classify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ conversationIds: ids }),
+        });
+        // Pull fresh data so the new labels render
+        loadFromServer();
+      } catch {
+        // silent — this is opportunistic background work
+      } finally {
+        running = false;
+      }
+    }
+    const initial = setTimeout(trickle, 10_000); // 10s after mount
+    const interval = setInterval(trickle, 5 * 60 * 1000); // every 5 min
+    return () => { clearTimeout(initial); clearInterval(interval); };
+  }, [loadFromServer]);
 
   // Handle data arriving via URL hash (legacy bookmarklet) or from the extension.
   // The transform now happens server-side in /api/import — we just POST raw data.
@@ -173,12 +218,8 @@ export default function Home() {
   useEffect(() => {
     if (typeof window === 'undefined' || !('Notification' in window)) return;
 
-    function ensurePermission() {
-      if (Notification.permission === 'default') {
-        Notification.requestPermission().catch(() => {});
-      }
-    }
-    ensurePermission();
+    // Permission is now requested explicitly from the bell popover header.
+    // We don't auto-prompt here (Chrome ignores non-gesture requests anyway).
 
     function checkFollowUps() {
       if (Notification.permission !== 'granted') return;
@@ -188,19 +229,40 @@ export default function Home() {
         if (!c.followUpAt) continue;
         const ts = new Date(c.followUpAt).getTime();
         if (isNaN(ts) || ts > now) continue;
+        // Tiered notifications: desktop ping ONLY for high-signal
+        // commitments. Soft-kind follow-ups land in the bell / Tasks but
+        // don't punch the user on the shoulder. Manual follow-ups always
+        // notify (the user explicitly set them).
+        const kind = (c as { followUpKind?: string | null }).followUpKind;
+        const isCommitment = c.followUpSource === 'manual' || kind === 'commitment';
+        if (!isCommitment) continue;
         // Key on conversation id + followUpAt — if user re-sets, key changes.
         const key = `${c.id}::${c.followUpAt}`;
         if (alertedFollowUps.has(key)) continue;
         newlyAlerted.push(key);
         const name = c.participants[0]?.name ?? 'Conversation';
+        // Body shows the actual phrase that triggered the follow-up so
+        // the user can sanity-check at a glance ("oh, they said 'ping me
+        // in Q1' — that's why this is firing").
+        const reason = c.followUpReason;
+        const body = reason
+          ? `“${reason.slice(0, 140)}”`
+          : (c.lastMessage?.slice(0, 140) || 'Time to follow up.');
         try {
           const n = new Notification(`Follow up: ${name}`, {
-            body: c.lastMessage?.slice(0, 140) || 'Time to follow up.',
+            body,
             tag: `inboxpro-followup-${c.id}`,
           });
           n.onclick = () => {
             window.focus();
-            useStore.getState().setActiveConversationId(c.id);
+            // Force navigation back to the inbox view AND open the conv.
+            // Without this, clicking a notification while on Settings /
+            // Drafts / Analytics silently changes the active conv but
+            // keeps the user in the other view — feels like "nothing
+            // happened" or even a broken navigation.
+            const store = useStore.getState();
+            store.setActiveFilter('all');
+            store.setActiveConversationId(c.id);
             n.close();
           };
         } catch {
@@ -229,13 +291,16 @@ export default function Home() {
   const isAnalytics = activeFilter === 'analytics';
   const isDiagnostics = activeFilter === 'diagnostics';
   const isQueue = activeFilter === 'queue';
+  const isContacts = activeFilter === 'contacts';
+  const isTasks = activeFilter === 'tasks';
+  const isReview = activeFilter === 'review';
   // Show the full onboarding wizard for first-time users (no convs synced AND
   // they haven't already finished onboarding). Falls back to the simpler
   // WelcomePanel only if they explicitly cleared their data later.
   const [onboarded, setOnboarded] = useState(true);
   const [previewWizard, setPreviewWizard] = useState(false);
   useEffect(() => {
-    try { setOnboarded(window.localStorage.getItem('inboxpro-onboarded') === '1'); } catch {}
+    setOnboarded(storage.onboarded.get());
     // Allow ?onboard=1 in the URL to preview the wizard without wiping data
     try {
       const params = new URLSearchParams(window.location.search);
@@ -243,8 +308,8 @@ export default function Home() {
     } catch {}
   }, []);
   const showOnboarding = previewWizard ||
-    (conversations.length === 0 && !onboarded && !isSettings && !isAnalytics && !isDiagnostics && !isQueue);
-  const showWelcome = !previewWizard && conversations.length === 0 && onboarded && !isSettings && !isAnalytics && !isDiagnostics && !isQueue;
+    (conversations.length === 0 && !onboarded && !isSettings && !isAnalytics && !isDiagnostics && !isQueue && !isContacts && !isTasks && !isReview);
+  const showWelcome = !previewWizard && conversations.length === 0 && onboarded && !isSettings && !isAnalytics && !isDiagnostics && !isQueue && !isContacts && !isTasks && !isReview;
 
   return (
     <div className="flex h-screen overflow-hidden bg-[var(--color-bg)] p-3 gap-3">
@@ -256,16 +321,32 @@ export default function Home() {
           </div>
         )}
         <div className="flex flex-1 min-w-0 overflow-hidden gap-3">
-          {isQueue ? (
-            <QueuePanel />
+          {/* Each panel branch fade-ins on mount. The `key` forces React
+              to treat each branch's div as a distinct element rather than
+              reusing the DOM node across branches — without it the wrapper
+              never unmounts and the animation never re-fires. */}
+          {isTasks ? (
+            <div key="tasks" className="view-fade-in flex flex-1 min-w-0"><TasksPanel /></div>
+          ) : isReview ? (
+            <div key="review" className="view-fade-in flex flex-1 min-w-0"><ReviewPanel /></div>
+          ) : isQueue ? (
+            <div key="queue" className="view-fade-in flex flex-1 min-w-0"><QueuePanel /></div>
+          ) : isContacts ? (
+            <div key="contacts" className="view-fade-in flex flex-1 min-w-0"><ContactsPanel /></div>
           ) : isAnalytics ? (
-            <AnalyticsPanel />
+            <div key="analytics" className="view-fade-in flex flex-1 min-w-0"><AnalyticsPanel /></div>
           ) : isDiagnostics ? (
-            <DiagnosticsPanel />
+            <div key="diagnostics" className="view-fade-in flex flex-1 min-w-0"><DiagnosticsPanel /></div>
           ) : isSettings ? (
-            <SettingsPanel />
+            <div key="settings" className="view-fade-in flex flex-1 min-w-0"><SettingsPanel /></div>
           ) : showOnboarding ? (
-            <OnboardingWizard preview={previewWizard} />
+            <OnboardingWizard
+              preview={previewWizard}
+              onComplete={() => {
+                setPreviewWizard(false);
+                setOnboarded(true);
+              }}
+            />
           ) : showWelcome ? (
             <WelcomePanel />
           ) : (

@@ -23,10 +23,24 @@
   --font-sans: 'Geist', ui-sans-serif, system-ui, sans-serif;
   --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, monospace;
 
-  /* Motion */
-  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
-  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
-  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  /* Motion — Apple-feel system. Use spring/spring-gentle for elements
+     entering or changing state; use out-soft/out-fluid for ambient
+     transitions that should decelerate to rest. */
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);    /* legacy alias of out-soft */
+  --ease-out-soft: cubic-bezier(0.25, 1, 0.5, 1);     /* sharp decel, ambient hovers */
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);     /* longer decel, fluid */
+  --ease-out-fluid: cubic-bezier(0.16, 1, 0.3, 1);    /* alias of out-expo */
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);      /* state changes */
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);   /* tasteful overshoot */
+  --ease-spring-gentle: cubic-bezier(0.32, 1.22, 0.55, 1); /* lighter overshoot for small elements */
+  --ease-in-out-soft: cubic-bezier(0.4, 0, 0.6, 1);
+
+  /* Duration tiers — multiples of 40ms */
+  --dur-instant: 80ms;   /* button press, ripple */
+  --dur-fast: 160ms;     /* hover, color, simple state */
+  --dur-medium: 240ms;   /* popover, dropdown, toggle knob */
+  --dur-slow: 360ms;     /* modal, sheet */
+  --dur-grand: 480ms;    /* major view transition */
 
   /* ── LIGHT (default) ── */
   --color-bg: #F4F4F5;              /* off-white page */
@@ -210,24 +224,160 @@ button { touch-action: manipulation; }
   font-variant-numeric: tabular-nums;
 }
 
+/* ─── Motion system: keyframes + utility classes ───────────────────────
+   Apple-feel: subtle scale + opacity, never pure fade. Origin-aware
+   transforms (popovers expand FROM their anchor, modals scale FROM
+   center). Spring-gentle for tasteful overshoot.
+
+   USAGE PATTERNS:
+     - popover-in       → dropdowns, menus, picker results (anchored)
+     - modal-in         → centered overlays
+     - backdrop-in      → modal/sheet backgrounds
+     - row-in           → list items appearing (often staggered)
+     - toast-in/out     → corner notifications
+     - view-fade-in     → route/view changes
+     - thread-fade      → conversation switching
+*/
+
 @keyframes row-in {
-  from { opacity: 0; transform: translateY(2px); }
+  from { opacity: 0; transform: translateY(3px); }
   to   { opacity: 1; transform: translateY(0); }
 }
+.row-in { animation: row-in var(--dur-medium) var(--ease-out-fluid) both; }
+
+/* Row exit — translateX away + height collapse. Required because CSS-only
+   exit animations need the element to stay mounted; the React side adds
+   a `leaving` class and waits for the animation before unmounting. */
+@keyframes row-out {
+  from { opacity: 1; transform: translateX(0); max-height: 200px; margin-bottom: inherit; }
+  to   { opacity: 0; transform: translateX(40px); max-height: 0; margin-bottom: 0; padding-top: 0; padding-bottom: 0; }
+}
+.row-out { animation: row-out var(--dur-medium) var(--ease-in-out-soft) forwards; overflow: hidden; }
+
+/* Stagger up to N children of a list. animation-delay is small but adds
+   up across 6-8 items to make the list "cascade" rather than slam in. */
+.row-in-stagger > * { animation: row-in var(--dur-medium) var(--ease-out-fluid) both; }
+.row-in-stagger > *:nth-child(1) { animation-delay: 0ms; }
+.row-in-stagger > *:nth-child(2) { animation-delay: 30ms; }
+.row-in-stagger > *:nth-child(3) { animation-delay: 60ms; }
+.row-in-stagger > *:nth-child(4) { animation-delay: 90ms; }
+.row-in-stagger > *:nth-child(5) { animation-delay: 120ms; }
+.row-in-stagger > *:nth-child(6) { animation-delay: 150ms; }
+.row-in-stagger > *:nth-child(7) { animation-delay: 180ms; }
+.row-in-stagger > *:nth-child(8) { animation-delay: 210ms; }
 
 /* Thread fade — fires when activeConversationId changes (via React key). */
 @keyframes thread-fade {
   from { opacity: 0; transform: translateY(4px); }
   to   { opacity: 1; transform: translateY(0); }
 }
+.thread-fade { animation: thread-fade var(--dur-medium) var(--ease-out-fluid); }
 
-/* Dropdown/menu entrance — origin top-right since most of our menus anchor
-   there. Subtle scale + fade for a tactile pop-in. */
+/* Popover entrance — origin-aware. Apply transform-origin inline based
+   on where the anchor lives (top-right for bell-style menus, top-left
+   for left-anchored, center for inline pickers). */
+@keyframes popover-in {
+  from { opacity: 0; transform: scale(0.96) translateY(-2px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+.popover-in { animation: popover-in var(--dur-medium) var(--ease-spring-gentle) both; }
+
+/* Legacy alias — older code uses .menu-in */
 @keyframes menu-in {
   from { opacity: 0; transform: scale(0.96) translateY(-4px); }
   to   { opacity: 1; transform: scale(1) translateY(0); }
 }
-.menu-in { animation: menu-in 140ms var(--ease-out-quart); transform-origin: top right; }
+.menu-in { animation: menu-in var(--dur-medium) var(--ease-spring-gentle) both; transform-origin: top right; }
+
+/* Modal entrance — scale + slight rise. Heavier than popover; backdrop
+   handles the fade separately. */
+@keyframes modal-in {
+  from { opacity: 0; transform: scale(0.92) translateY(8px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+.modal-in { animation: modal-in var(--dur-slow) var(--ease-spring-gentle) both; }
+
+/* Backdrop fade — separated from modal so it can use a different
+   (gentler) curve. */
+@keyframes backdrop-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.backdrop-in { animation: backdrop-in var(--dur-medium) var(--ease-out-soft) both; }
+
+/* Corner toast — slide in from below + scale up slightly. */
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.toast-in { animation: toast-in var(--dur-medium) var(--ease-spring-gentle) both; }
+
+@keyframes toast-out {
+  to { opacity: 0; transform: translateY(8px) scale(0.96); }
+}
+.toast-out { animation: toast-out var(--dur-medium) var(--ease-in-out-soft) forwards; }
+
+/* View transitions — applied to the top-level container of each route
+   panel. Keyed on activeFilter via React so it re-fires on change. */
+@keyframes view-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.view-fade-in { animation: view-fade-in var(--dur-slow) var(--ease-out-fluid) both; }
+
+/* Press feedback — used on primary buttons via :active state. */
+.press-feedback { transition: transform var(--dur-instant) var(--ease-standard); }
+.press-feedback:active { transform: scale(0.97); }
+
+/* Send button fly-away — scales down + nudges up briefly when fired. */
+@keyframes send-fly {
+  0%   { transform: scale(1) translateY(0); }
+  35%  { transform: scale(0.85) translateY(-4px); }
+  60%  { transform: scale(0.95) translateY(-2px); }
+  100% { transform: scale(1) translateY(0); }
+}
+.send-fly { animation: send-fly var(--dur-medium) var(--ease-spring-gentle); }
+
+/* Shake — used on send failure or invalid input. Short horizontal jitter. */
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20%      { transform: translateX(-4px); }
+  40%      { transform: translateX(4px); }
+  60%      { transform: translateX(-3px); }
+  80%      { transform: translateX(2px); }
+}
+.shake { animation: shake 400ms var(--ease-in-out-soft); }
+
+/* Snippet insertion flash — accent border glow that fades. */
+@keyframes snippet-flash {
+  0%   { box-shadow: 0 0 0 0 rgb(var(--color-accent-rgb) / 0.4); }
+  40%  { box-shadow: 0 0 0 3px rgb(var(--color-accent-rgb) / 0.35); }
+  100% { box-shadow: 0 0 0 0 rgb(var(--color-accent-rgb) / 0); }
+}
+.snippet-flash { animation: snippet-flash 600ms var(--ease-out-soft); }
+
+/* Skeleton shimmer — a subtle sweep across loading placeholders. */
+@keyframes skeleton-shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--color-surface-2) 0%,
+    var(--color-card-hover) 50%,
+    var(--color-surface-2) 100%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.6s linear infinite;
+  border-radius: 12px;
+}
+
+/* Smooth theme cross-fade — applied to color-bearing elements so the
+   light↔dark swap doesn't snap. Limited to root + cards + key chrome to
+   avoid transitioning every interaction state. */
+:root, body { transition: background-color var(--dur-medium) var(--ease-out-soft), color var(--dur-medium) var(--ease-out-soft); }
+.card { transition: background-color var(--dur-medium) var(--ease-out-soft), border-color var(--dur-medium) var(--ease-out-soft); }
 
 /* Input primitive — single source of truth for text inputs, textareas, and
    datetime inputs. Follows the accent color picker (not hardcoded blue) and
@@ -263,3 +413,70 @@ button { touch-action: manipulation; }
   50%      { opacity: 0.6; }
 }
 .pulse-soft { animation: pulse-soft 2.4s var(--ease-out-quart) infinite; }
+
+/* ─── Sidebar pin modes ─────────────────────────────────────────────────
+   The sidebar uses Tailwind's max-lg: modifier to auto-collapse below the
+   1024px breakpoint. These overrides let the user PIN the sidebar to
+   expanded or collapsed regardless of viewport width.
+*/
+
+/* Pinned EXPANDED — force always-220px, hide nothing, no collapse. */
+.sidebar-pin-expanded,
+.sidebar-pin-expanded > div {
+  width: 220px !important;
+}
+.sidebar-pin-expanded .max-lg\:hidden,
+.sidebar-pin-expanded .max-lg\:group-hover\/sidebar\:hidden { display: revert !important; }
+.sidebar-pin-expanded .max-lg\:justify-center { justify-content: flex-start !important; }
+.sidebar-pin-expanded .max-lg\:flex-col { flex-direction: row !important; }
+.sidebar-pin-expanded .max-lg\:px-0 { padding-left: 1rem !important; padding-right: 1rem !important; }
+.sidebar-pin-expanded .max-lg\:w-\[64px\] { width: 220px !important; }
+/* Mini count badge over icon — hide; the inline count handles the expanded case */
+.sidebar-pin-expanded .hidden.max-lg\:flex { display: none !important; }
+/* Inline label text — force visible */
+.sidebar-pin-expanded .max-lg\:group-hover\/sidebar\:inline,
+.sidebar-pin-expanded .max-lg\:group-hover\/sidebar\:block { display: revert !important; }
+.sidebar-pin-expanded .max-lg\:group-hover\/sidebar\:inline-flex { display: inline-flex !important; }
+
+/* Pinned COLLAPSED — same behavior as the auto-collapse at sub-lg viewport,
+   just always-on regardless of window width. Mirror every max-lg rule. */
+.sidebar-pin-collapsed,
+.sidebar-pin-collapsed > div {
+  width: 64px !important;
+}
+.sidebar-pin-collapsed .max-lg\:w-\[64px\] { width: 64px !important; }
+.sidebar-pin-collapsed .max-lg\:hidden { display: none !important; }
+.sidebar-pin-collapsed .max-lg\:flex { display: flex !important; }
+.sidebar-pin-collapsed .max-lg\:justify-center { justify-content: center !important; }
+.sidebar-pin-collapsed .max-lg\:flex-col { flex-direction: column !important; }
+.sidebar-pin-collapsed .max-lg\:px-0 { padding-left: 0 !important; padding-right: 0 !important; }
+
+/* Hover expand — restore the expanded look as overlay. Mirrors all
+   max-lg:group-hover/sidebar:* rules. */
+.sidebar-pin-collapsed:hover > div {
+  width: 220px !important;
+  box-shadow: var(--shadow-raised);
+}
+.sidebar-pin-collapsed:hover .max-lg\:group-hover\/sidebar\:hidden { display: none !important; }
+.sidebar-pin-collapsed:hover .max-lg\:group-hover\/sidebar\:block { display: block !important; }
+.sidebar-pin-collapsed:hover .max-lg\:group-hover\/sidebar\:inline { display: inline !important; }
+.sidebar-pin-collapsed:hover .max-lg\:group-hover\/sidebar\:inline-flex { display: inline-flex !important; }
+.sidebar-pin-collapsed:hover .max-lg\:group-hover\/sidebar\:flex-row { flex-direction: row !important; }
+.sidebar-pin-collapsed:hover .max-lg\:group-hover\/sidebar\:justify-start { justify-content: flex-start !important; }
+.sidebar-pin-collapsed:hover .max-lg\:group-hover\/sidebar\:px-4 { padding-left: 1rem !important; padding-right: 1rem !important; }
+.sidebar-pin-collapsed:hover .max-lg\:group-hover\/sidebar\:w-\[220px\] { width: 220px !important; }
+
+/* View Transitions API tuning for the theme toggle cross-fade.
+   The default is ~250ms which feels snappy but slightly abrupt — soften
+   the curve and stretch it to match our medium duration tier. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: var(--dur-medium);
+  animation-timing-function: var(--ease-out-soft);
+}
+::view-transition-old(root) { animation-name: view-fade-out; }
+::view-transition-new(root) { animation-name: view-fade-in; }
+@keyframes view-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}

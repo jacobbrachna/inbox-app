@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { CORS, safeParseArray, optionsResponse } from '@/lib/api-utils';
 import type { Participant } from '@/types';
+import { upsertContact, extractProfileSlug, extractProfileUrn } from '@/lib/contact-upsert';
 
 // PUT { enrichment: {...} } — store profile enrichment fetched by the extension.
 // The extension drives the LinkedIn fetch (it has the auth context) and POSTs
@@ -40,6 +41,33 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
         ...(participantsJson !== conv.participants ? { participants: participantsJson } : {}),
       },
     });
+
+    // Mirror to the Contact for the primary participant. Rich fields
+    // (about / prevRoles / education) live on Contact rows so the UI doesn't
+    // need to dig into the enrichment JSON blob.
+    const parts = safeParseArray<Participant>(participantsJson, []);
+    const primary = parts[0];
+    if (primary?.name) {
+      const enr = enrichment as Record<string, unknown>;
+      await upsertContact({
+        linkedinUrn: extractProfileUrn(primary.id) ?? null,
+        profileSlug: extractProfileSlug(primary.profileUrl ?? resolvedUrl),
+        profileUrl: primary.profileUrl ?? resolvedUrl ?? null,
+        name: primary.name,
+        headline: typeof enr.headline === 'string' ? enr.headline : (primary.headline ?? null),
+        avatarUrl: primary.avatarUrl ?? null,
+        company: typeof enr.company === 'string' ? enr.company : null,
+        role: typeof enr.role === 'string' ? enr.role : null,
+        location: typeof enr.location === 'string' ? enr.location : null,
+        industry: typeof enr.industry === 'string' ? enr.industry : null,
+        about: typeof enr.about === 'string' ? enr.about : null,
+        prevRoles: Array.isArray(enr.prevRoles) ? enr.prevRoles : null,
+        education: Array.isArray(enr.education) ? enr.education : null,
+        recentPosts: Array.isArray(enr.recentPosts) ? enr.recentPosts : null,
+        source: 'dom-capture',
+      });
+    }
+
     return NextResponse.json({ ok: true }, { headers: CORS });
   } catch (e) {
     return NextResponse.json(

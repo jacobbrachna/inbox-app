@@ -3,7 +3,7 @@ import { prisma } from '@/lib/db';
 import { CORS, optionsResponse } from '@/lib/api-utils';
 import { invalidateApiKeyCache } from '@/lib/ai';
 
-// GET — return masked indicator (does the key exist?)
+// GET — return key indicator + every field the AI settings UI cares about.
 export async function GET() {
   const state = await prisma.appState.findUnique({ where: { id: 1 } });
   const key = state?.anthropicApiKey ?? '';
@@ -12,12 +12,37 @@ export async function GET() {
       hasKey: !!key,
       mask: key ? `…${key.slice(-4)}` : null,
       styleNote: state?.aiStyleNote ?? '',
+      myCompany: state?.myCompany ?? '',
+      myRole: state?.myRole ?? '',
+      companyOneLiner: state?.companyOneLiner ?? '',
+      outreachGoal: state?.outreachGoal ?? '',
+      idealCustomerProfile: state?.idealCustomerProfile ?? '',
+      keyValueProps: state?.keyValueProps ?? '',
+      myProfileSlug: state?.myProfileSlug ?? '',
+      myEmploymentHistory: state?.myEmploymentHistory ?? '',
+      myProfileRefreshedAt: state?.myProfileRefreshedAt ?? null,
     },
     { headers: CORS },
   );
 }
 
-// PUT — save a new key (and optionally a style note)
+const SENDER_FIELDS = [
+  'myCompany', 'myRole', 'companyOneLiner', 'outreachGoal',
+  'idealCustomerProfile', 'keyValueProps', 'myProfileSlug',
+] as const;
+
+// Pulls "abcd-ef-123" out of any /in/ URL or just returns the slug if it
+// already looks slug-shaped. Returns null if we can't parse a sensible slug.
+function normalizeLinkedInSlug(input: string): string | null {
+  const s = input.trim();
+  if (!s) return null;
+  const urlMatch = s.match(/linkedin\.com\/in\/([^/?#]+)/i);
+  if (urlMatch) return urlMatch[1];
+  if (/^[a-z0-9-_%]+$/i.test(s) && s.length < 120) return s;
+  return null;
+}
+
+// PUT — save the key, style note, and/or any sender-context field.
 export async function PUT(req: NextRequest) {
   try {
     const body = await req.json();
@@ -44,6 +69,16 @@ export async function PUT(req: NextRequest) {
     const data: Record<string, string | null> = {};
     if (rawKey !== undefined) data.anthropicApiKey = rawKey || null;
     if (styleNote !== undefined) data.aiStyleNote = styleNote;
+    for (const f of SENDER_FIELDS) {
+      if (typeof body[f] === 'string') {
+        // Normalize the LinkedIn URL → slug at write time.
+        if (f === 'myProfileSlug') {
+          data[f] = normalizeLinkedInSlug(body[f]);
+        } else {
+          data[f] = body[f].trim() || null;
+        }
+      }
+    }
 
     await prisma.appState.upsert({
       where: { id: 1 },

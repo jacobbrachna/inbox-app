@@ -38,6 +38,8 @@ zip -r "$ZIP_PATH" . \
   -x ".git/*" \
   -x "dev.db" \
   -x "dev.db-journal" \
+  -x "dev.db.backup-*" \
+  -x "backups/*" \
   -x "prisma/dev.db" \
   -x "prisma/dev.db-journal" \
   -x "sync-events.log" \

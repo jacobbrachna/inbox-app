@@ -2,6 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { CORS, safeParseArray, optionsResponse } from '@/lib/api-utils';
 import type { Participant } from '@/types';
+import {
+  upsertContact,
+  linkContactToConversation,
+  extractProfileSlug,
+  parseLinkedInDate,
+  type ContactSource,
+} from '@/lib/contact-upsert';
 
 // POST { items: [{ url, name }, ...] }
 // Bulk version of /api/profile-capture for the URL harvest. We normalize all
@@ -104,6 +111,32 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, updated: 0, scanned: 0 }, { headers: CORS });
     }
 
+    // Upsert a Contact for EVERY harvested item — this is the key fix that
+    // turns "ghost connections" into queryable records. Items with metadata
+    // from the LinkedIn CSV export get higher source priority.
+    const contactIdByUrl = new Map<string, string>();
+    let contactsCreated = 0;
+    for (const it of items) {
+      if (!it.url || !it.name) continue;
+      const source: ContactSource = (it.company || it.role || it.connectedOn)
+        ? 'linkedin-export'
+        : 'harvest';
+      const cid = await upsertContact({
+        profileUrl: it.url,
+        profileSlug: extractProfileSlug(it.url),
+        name: it.name,
+        avatarUrl: it.avatarUrl ?? null,
+        company: it.company ?? null,
+        role: it.role ?? null,
+        connectedOn: parseLinkedInDate(it.connectedOn),
+        source,
+      });
+      if (cid) {
+        contactIdByUrl.set(it.url, cid);
+        contactsCreated++;
+      }
+    }
+
     // Pull all conversations once and match in memory
     const convs = await prisma.conversation.findMany({
       select: { id: true, participants: true, enrichment: true },
@@ -167,6 +200,13 @@ export async function POST(req: NextRequest) {
         },
       });
       updated++;
+
+      // Link each newly-attributed participant to its Contact row.
+      for (const p of nextParts) {
+        if (!p.profileUrl) continue;
+        const cid = contactIdByUrl.get(p.profileUrl);
+        if (cid) await linkContactToConversation(cid, c.id);
+      }
     }
 
     // Diagnostic: surface a few unmatched harvest names + a few unmatched
@@ -215,6 +255,7 @@ export async function POST(req: NextRequest) {
         avatarHits,
         totalContacts: convs.length,
         totalWithUrl,
+        contactsUpserted: contactsCreated,
       },
       { headers: CORS },
     );

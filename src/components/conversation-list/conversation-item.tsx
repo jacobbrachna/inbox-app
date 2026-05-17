@@ -4,20 +4,11 @@ import { Star, Clock, Archive, Check, StickyNote, BellRing, AlertTriangle } from
 import { cn } from '@/lib/cn';
 import { Badge } from '@/components/shared/badge';
 import { useStore } from '@/store';
-import type { AiCategory, Conversation } from '@/types';
+import type { Conversation } from '@/types';
 import { formatDistanceToNowStrict } from 'date-fns';
 import { ConvContextMenu } from './conv-context-menu';
 import { hueForName } from '@/lib/color-for-name';
 
-const CATEGORY_STYLE: Record<AiCategory, { label: string; cls: string }> = {
-  'cold-pitch': { label: 'Cold',     cls: 'bg-[var(--color-surface-2)] text-[var(--color-text-tertiary)]' },
-  'warm-lead':  { label: 'Warm',     cls: 'bg-[var(--color-accent-soft)] text-[var(--color-accent-fg)]' },
-  'client':     { label: 'Client',   cls: 'bg-[var(--color-success)]/15 text-[var(--color-success)]' },
-  'recruiter':  { label: 'Recruit',  cls: 'bg-[var(--color-info)]/15 text-[var(--color-info)]' },
-  'intro':      { label: 'Intro',    cls: 'bg-[var(--color-info)]/15 text-[var(--color-info)]' },
-  'spam':       { label: 'Spam',     cls: 'bg-[var(--color-danger)]/15 text-[var(--color-danger)]' },
-  'other':      { label: '',         cls: '' },
-};
 
 interface ConversationItemProps {
   conversation: Conversation;
@@ -47,6 +38,10 @@ export function ConversationItem({ conversation, isActive, onClick }: Conversati
   const { updateConversation, labels, selectedIds, toggleSelected } = useStore();
   const primary = conversation.participants[0];
   const isUnread = conversation.status === 'unread';
+  const isDraft = conversation.status === 'draft';
+  // Draft rows can have no recipient yet — show a placeholder name so the
+  // row is still meaningful in the Drafts list.
+  const displayName = primary?.name || (isDraft ? 'No recipient' : 'Unknown');
   const isSelected = selectedIds.has(conversation.id);
   const anySelected = selectedIds.size > 0;
   const rowRef = useRef<HTMLDivElement>(null);
@@ -110,10 +105,10 @@ export function ConversationItem({ conversation, isActive, onClick }: Conversati
         'group/row relative w-full flex items-start gap-3 px-3 py-3 text-left rounded-[12px] cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent)]',
         isActive && 'bg-[rgb(var(--color-accent-rgb)/0.10)]',
         isSelected && !isActive && 'bg-[rgb(var(--color-accent-rgb)/0.06)]',
-        !isActive && !isSelected && 'hover:bg-[var(--color-card-hover)]',
+        !isActive && !isSelected && 'hover:bg-[var(--color-card-hover)] hover:translate-x-[2px]',
       )}
       style={{
-        transition: 'background-color 180ms var(--ease-out-quart)',
+        transition: 'background-color 180ms var(--ease-out-quart), transform 200ms var(--ease-out-fluid)',
         // Skip rendering offscreen rows entirely. 80px is the approximate row
         // height — reserves scroll space so the scrollbar position is stable.
         contentVisibility: 'auto',
@@ -142,7 +137,7 @@ export function ConversationItem({ conversation, isActive, onClick }: Conversati
         />
       )}
       {/* Avatar / monogram tile — rounded square */}
-      <div className="relative flex-shrink-0">
+      <div className="relative flex-shrink-0 flex flex-col items-center">
         {primary?.avatarUrl ? (
           <div
             className={cn(
@@ -198,6 +193,15 @@ export function ConversationItem({ conversation, isActive, onClick }: Conversati
         >
           {isSelected && <Check className="w-4 h-4 text-white" strokeWidth={3} />}
         </button>
+        {/* Source indicator — small chip below the avatar (no longer mingles with labels) */}
+        {conversation.source === 'sales_nav' && (
+          <span
+            className="mt-1 mono text-[8.5px] tracking-wide px-1 py-[1px] rounded-sm bg-[var(--color-surface-2)] text-[var(--color-text-tertiary)] leading-none"
+            title="Sales Navigator conversation"
+          >
+            SN
+          </span>
+        )}
       </div>
 
       {/* Content */}
@@ -212,8 +216,11 @@ export function ConversationItem({ conversation, isActive, onClick }: Conversati
                   : 'font-medium text-[var(--color-text-primary)]',
               )}
             >
-              {primary?.name ?? 'Unknown'}
+              {displayName}
             </span>
+            {isDraft && (
+              <span className="text-[9.5px] uppercase tracking-wide bg-[var(--color-accent-soft)] text-[var(--color-accent-fg)] px-1.5 py-0.5 rounded font-semibold flex-shrink-0">Draft</span>
+            )}
             {hasNotes && (
               <StickyNote
                 className="w-3 h-3 text-[var(--color-accent-deep)] flex-shrink-0 -translate-y-px"
@@ -249,24 +256,9 @@ export function ConversationItem({ conversation, isActive, onClick }: Conversati
           {conversation.lastMessage || 'No preview available'}
         </p>
 
-        {(conversationLabels.length > 0 || followUpAt || conversation.source === 'sales_nav' || conversation.aiCategory) && (
+        {(conversationLabels.length > 0 || followUpAt) && (
           <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
-            {conversation.aiCategory && conversation.aiCategory !== 'other' && CATEGORY_STYLE[conversation.aiCategory].label && (
-              <span
-                className={cn(
-                  'eyebrow text-[9px] px-1.5 py-0.5 rounded-full',
-                  CATEGORY_STYLE[conversation.aiCategory].cls,
-                )}
-                title={conversation.aiSummary ?? undefined}
-              >
-                {CATEGORY_STYLE[conversation.aiCategory].label}
-              </span>
-            )}
-            {conversation.source === 'sales_nav' && (
-              <span className="eyebrow text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--color-surface-2)] text-[var(--color-text-secondary)]">
-                Sales Nav
-              </span>
-            )}
+
             {followUpAt && (
               followUpOverdue ? (
                 <span

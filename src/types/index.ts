@@ -4,10 +4,17 @@ export type Label = {
   id: string;
   name: string;
   color: string;
+  // description: AI uses this when deciding whether to apply the label.
+  // Null = user-only label (won't be auto-applied).
+  description?: string | null;
+  aiManaged?: boolean;
+  // exclusiveGroup: labels sharing a group key are mutually exclusive on a
+  // conversation. Null = no group constraint.
+  exclusiveGroup?: string | null;
   count?: number;
 };
 
-export type ConversationStatus = 'unread' | 'read' | 'snoozed' | 'archived';
+export type ConversationStatus = 'unread' | 'read' | 'snoozed' | 'archived' | 'draft';
 
 export type Participant = {
   id: string;
@@ -30,14 +37,24 @@ export type Message = {
   isFromMe: boolean;
 };
 
-export type AiCategory =
-  | 'cold-pitch'
-  | 'warm-lead'
-  | 'client'
-  | 'recruiter'
-  | 'intro'
-  | 'spam'
-  | 'other';
+export type RoleEntry = {
+  role: string | null;
+  company: string | null;
+  from: string | null;
+  to: string | null;
+};
+export type EducationEntry = {
+  school: string | null;
+  degree: string | null;
+  from: string | null;
+  to: string | null;
+};
+export type RecentPost = {
+  url: string | null;
+  text: string | null;
+  postedAt: string | null;
+  kind: 'post' | 'reshare';
+};
 
 export type Enrichment = {
   company?: string;
@@ -45,6 +62,12 @@ export type Enrichment = {
   location?: string;
   industry?: string;
   tenure?: string;
+  headline?: string;
+  about?: string;
+  prevRoles?: RoleEntry[];
+  education?: EducationEntry[];
+  skills?: string[];
+  recentPosts?: RecentPost[];
   // Raw payload we keep around for surfacing extra fields later
   raw?: Record<string, unknown>;
 };
@@ -61,9 +84,14 @@ export type Conversation = {
   labels: string[];
   snoozedUntil?: string | null;
   followUpAt?: string | null;
+  followUpReason?: string | null;
+  followUpSource?: 'manual' | 'ai' | null;
+  followUpConfidence?: 'high' | 'low' | null;
+  followUpKind?: 'commitment' | 'soft' | null;
+  followUpActor?: 'self' | 'them' | 'either' | null;
+  needsReview?: boolean;
   notes?: string;
   isStarred?: boolean;
-  aiCategory?: AiCategory | null;
   aiSummary?: string | null;
   enrichment?: Enrichment | null;
 };
@@ -100,7 +128,11 @@ export type FilterView =
   | 'analytics'
   | 'diagnostics'
   | 'queue'
+  | 'tasks'
+  | 'contacts'
+  | 'review'
   | 'has-notes'
+  | 'drafts'
   | `label:${string}`
   | `company:${string}`
   | `role:${string}`

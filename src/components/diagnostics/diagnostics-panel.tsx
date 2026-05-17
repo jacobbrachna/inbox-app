@@ -1,7 +1,9 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { Activity, Database, RefreshCw, Trash2, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { Activity, Database, RefreshCw, Trash2, AlertTriangle, CheckCircle2, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/cn';
+import { useStore } from '@/store';
+import { useExtensionReady } from '@/lib/use-extension-ready';
 
 interface Stats {
   convCount: number;
@@ -226,10 +228,15 @@ function ResetButton({ onDone }: { onDone: () => void }) {
 export function DiagnosticsPanel() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [log, setLog] = useState<LogEntry[]>([]);
-  const [bridgeReady, setBridgeReady] = useState(false);
+  const bridgeReady = useExtensionReady();
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [liSyncState, setLiSyncState] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
   const [liSyncMsg, setLiSyncMsg] = useState('');
+  const [classifyState, setClassifyState] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
+  const [classifyProgress, setClassifyProgress] = useState({ done: 0, total: 0, labels: 0, review: 0 });
+  const [classifyError, setClassifyError] = useState<string | null>(null);
+  const [classifyCounts, setClassifyCounts] = useState<{ eligible: number; pending: number } | null>(null);
+  const loadFromServer = useStore((s) => s.loadFromServer);
 
   async function loadAll() {
     // Load each endpoint independently — if one fails (e.g. /api/diagnostics
@@ -249,9 +256,16 @@ export function DiagnosticsPanel() {
       .catch(() => {});
   }
 
+  function loadClassifyCounts() {
+    fetch('/api/ai/classify-all')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (d) setClassifyCounts({ eligible: d.eligible ?? 0, pending: d.pending ?? 0 }); })
+      .catch(() => {});
+  }
+
   useEffect(() => {
-    setBridgeReady(!!document.getElementById('inboxpro-bridge-marker'));
     loadAll();
+    loadClassifyCounts();
   }, []);
 
   useEffect(() => {
@@ -267,6 +281,53 @@ export function DiagnosticsPanel() {
 
   function forceRefresh() {
     window.postMessage({ type: 'inboxpro-refresh-request' }, '*');
+  }
+
+  async function classifyAll(force = false) {
+    if (classifyState === 'running') return;
+    setClassifyState('running');
+    setClassifyError(null);
+    setClassifyProgress({ done: 0, total: 0, labels: 0, review: 0 });
+    try {
+      const r = await fetch('/api/ai/classify-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error ?? `HTTP ${r.status}`);
+      const ids: string[] = d.ids ?? [];
+      if (ids.length === 0) {
+        setClassifyState('done');
+        setClassifyProgress({ done: 0, total: 0, labels: 0, review: 0 });
+        return;
+      }
+      setClassifyProgress({ done: 0, total: ids.length, labels: 0, review: 0 });
+      const CHUNK = 25;
+      for (let i = 0; i < ids.length; i += CHUNK) {
+        const slice = ids.slice(i, i + CHUNK);
+        const cr = await fetch('/api/ai/classify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ conversationIds: slice, force }),
+        });
+        const cd = await cr.json();
+        if (!cr.ok) throw new Error(cd.error ?? `HTTP ${cr.status}`);
+        setClassifyProgress((p) => ({
+          done: p.done + slice.length,
+          total: ids.length,
+          labels: p.labels + (cd.labelsApplied ?? 0),
+          review: p.review + (cd.reviewFlagged ?? 0),
+        }));
+      }
+      setClassifyState('done');
+      // Refresh labels + conversations so freshly-applied labels render with names
+      await loadFromServer();
+      loadClassifyCounts();
+    } catch (e) {
+      setClassifyState('error');
+      setClassifyError(e instanceof Error ? e.message : 'Classify failed');
+    }
   }
 
   function startFullLiSync() {
@@ -373,6 +434,9 @@ export function DiagnosticsPanel() {
         </div>
       </section>
 
+      {/* Parser health — surfaces when LinkedIn shape drifts under our scrapers */}
+      <ParserHealthSection />
+
       {/* DB stats */}
       <section className="mb-6">
         <h3 className="eyebrow mb-3">Database</h3>
@@ -402,6 +466,38 @@ export function DiagnosticsPanel() {
       {/* Quick actions */}
       <section className="mb-6">
         <h3 className="eyebrow mb-3">Quick actions</h3>
+        {classifyState === 'running' && (
+          <div className="mb-3 p-3 rounded-lg bg-[var(--color-accent-soft)] border border-[var(--color-accent)]/30 flex items-center gap-3">
+            <Sparkles className="w-4 h-4 text-[var(--color-accent)] animate-pulse flex-shrink-0" />
+            <div className="flex-1 min-w-0">
+              <div className="text-[12.5px] font-semibold text-[var(--color-text-primary)]">
+                Classifying {classifyProgress.done.toLocaleString()} / {classifyProgress.total.toLocaleString()}
+                {classifyProgress.total > 0 && ` · ${Math.round((classifyProgress.done / classifyProgress.total) * 100)}%`}
+              </div>
+              <div className="text-[11px] text-[var(--color-text-tertiary)] mt-0.5">
+                {classifyProgress.labels.toLocaleString()} labels applied · {classifyProgress.review.toLocaleString()} flagged for review
+              </div>
+              {classifyProgress.total > 0 && (
+                <div className="mt-2 h-1 rounded-full bg-[var(--color-surface-2)] overflow-hidden">
+                  <div
+                    className="h-full bg-[var(--color-accent)] transition-all"
+                    style={{ width: `${(classifyProgress.done / classifyProgress.total) * 100}%` }}
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+        {classifyState === 'done' && classifyProgress.total > 0 && (
+          <div className="mb-3 p-2.5 rounded-lg bg-[var(--color-success)]/10 border border-[var(--color-success)]/30 text-[12px] text-[var(--color-text-secondary)]">
+            ✓ Classified {classifyProgress.done.toLocaleString()} conversations · {classifyProgress.labels.toLocaleString()} labels · {classifyProgress.review.toLocaleString()} for review
+          </div>
+        )}
+        {classifyState === 'error' && (
+          <div className="mb-3 p-2.5 rounded-lg bg-[var(--color-danger)]/10 border border-[var(--color-danger)]/30 text-[12px] text-[var(--color-danger)]">
+            ✗ {classifyError}
+          </div>
+        )}
         <div className="flex gap-2 flex-wrap">
           <button
             onClick={forceRefresh}
@@ -427,6 +523,36 @@ export function DiagnosticsPanel() {
             <RefreshCw className={cn('w-3.5 h-3.5', liSyncState === 'running' && 'animate-spin')} />
             {liSyncState === 'running' ? liSyncMsg : liSyncState === 'done' ? `✓ ${liSyncMsg}` : liSyncState === 'error' ? `✗ ${liSyncMsg}` : 'Full LinkedIn re-sync'}
           </button>
+          <button
+            onClick={() => classifyAll(false)}
+            disabled={classifyState === 'running' || classifyCounts?.pending === 0}
+            className="flex items-center gap-2 px-3 py-2 bg-[var(--color-card)] hover:bg-[var(--color-card-hover)] border border-[var(--color-hairline)] text-[var(--color-text-secondary)] disabled:opacity-50 disabled:cursor-not-allowed text-sm rounded-lg"
+            style={{ transition: 'background-color 140ms var(--ease-out-quart)' }}
+            title="Run AI classification across unclassified conversations"
+          >
+            <Sparkles className={cn('w-3.5 h-3.5', classifyState === 'running' && 'animate-pulse')} />
+            {classifyCounts === null
+              ? 'AI-classify all conversations'
+              : classifyCounts.pending === 0
+              ? `All ${classifyCounts.eligible} classified`
+              : `AI-classify ${classifyCounts.pending} conversations (~${formatDuration(classifyCounts.pending)})`}
+          </button>
+          {classifyCounts && classifyCounts.eligible > 0 && (
+            <button
+              onClick={() => {
+                if (confirm(`Re-classify all ${classifyCounts.eligible} conversations? This overwrites existing AI labels and follow-ups. Estimated time: ~${formatDuration(classifyCounts.eligible)}.`)) {
+                  classifyAll(true);
+                }
+              }}
+              disabled={classifyState === 'running'}
+              className="flex items-center gap-2 px-3 py-2 bg-[var(--color-card)] hover:bg-[var(--color-card-hover)] border border-[var(--color-hairline)] text-[var(--color-text-tertiary)] disabled:opacity-50 disabled:cursor-not-allowed text-sm rounded-lg"
+              style={{ transition: 'background-color 140ms var(--ease-out-quart)' }}
+              title="Re-classify everything from scratch — overwrites existing AI labels and follow-ups"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              Force re-classify all (~{formatDuration(classifyCounts.eligible)})
+            </button>
+          )}
           <ResetButton onDone={loadAll} />
         </div>
       </section>
@@ -488,4 +614,74 @@ export function DiagnosticsPanel() {
       </section>
     </div>
   );
+}
+
+// Parser health widget — reads /api/parser-health, shows per-source success
+// rate over the last 7 days. Surfaces drift in LinkedIn's response shape
+// before it becomes painful (no recent captures, success rate cratering).
+type ParserHealthSource = {
+  source: string;
+  total: number;
+  success: number;
+  failure: number;
+  rate: number | null;
+  lastSampleAt: string | null;
+  samples24h: number;
+};
+
+const SOURCE_LABELS: Record<string, string> = {
+  'sdui-parse': 'SDUI parser',
+  'profile-capture-dom': 'Profile DOM scrape',
+  'voyager-tap': 'Voyager API tap',
+};
+
+function ParserHealthSection() {
+  const [data, setData] = useState<{ sources: ParserHealthSource[]; windowHours: number } | null>(null);
+  useEffect(() => {
+    fetch('/api/parser-health').then((r) => r.json()).then(setData).catch(() => {});
+  }, []);
+  return (
+    <section className="mb-6">
+      <h3 className="eyebrow mb-3">Parser health (last 7 days)</h3>
+      <div className="grid grid-cols-3 gap-3">
+        {(data?.sources ?? [
+          { source: 'sdui-parse' }, { source: 'profile-capture-dom' }, { source: 'voyager-tap' },
+        ] as ParserHealthSource[]).map((s) => {
+          const rate = s.rate;
+          const noData = s.total === 0;
+          const color: 'gray' | 'green' | 'amber' | 'red' =
+            noData ? 'gray'
+            : rate === null ? 'gray'
+            : rate >= 0.95 ? 'green'
+            : rate >= 0.80 ? 'amber'
+            : 'red';
+          const pct = rate === null ? '—' : `${Math.round(rate * 100)}%`;
+          const sub = noData
+            ? 'no samples yet'
+            : `${s.success}/${s.total} ok · ${s.samples24h} in 24h${s.lastSampleAt ? ` · last ${new Date(s.lastSampleAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` : ''}`;
+          return (
+            <StatBox
+              key={s.source}
+              label={SOURCE_LABELS[s.source] ?? s.source}
+              value={pct}
+              color={color}
+              sub={sub}
+            />
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+// Empirical: ~1.3s per conv on Haiku, batched in 25s with some network overhead.
+// Round up so users aren't surprised by it running long.
+function formatDuration(count: number): string {
+  const seconds = Math.ceil(count * 1.5);
+  if (seconds < 60) return `${seconds} sec`;
+  const minutes = Math.ceil(seconds / 60);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const remMin = minutes % 60;
+  return remMin === 0 ? `${hours} hr` : `${hours} hr ${remMin} min`;
 }

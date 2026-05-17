@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { CORS, optionsResponse } from '@/lib/api-utils';
+import { linkParticipantsToConversation } from '@/lib/contact-upsert';
 
 // POST { body: string } — raw JSON from /sales-api/salesApiMessagingThreads.
 // Shape (verified from a real response in sn-samples/live-*.json):
@@ -210,6 +211,7 @@ export async function POST(req: NextRequest) {
             labels: '[]',
           },
         });
+        await linkParticipantsToConversation(convId, [participant], null);
       }
       convsTouched++;
 

@@ -360,7 +360,7 @@ export function AnalyticsPanel() {
 interface ActivityData {
   window: { from: string; to: string; days: number; replyWindowDays: number };
   totals: { outbound: number; inbound: number; replied: number; replyRate: number; avgResponseTimeHours: number };
-  byCategory: Array<{ category: string; sent: number; replies: number; replyRate: number }>;
+  byLabel: Array<{ labelId: string; name: string; color: string | null; sent: number; replies: number; replyRate: number }>;
   queues: { hot: unknown[]; goingCold: unknown[]; awaitingFirstReply: number };
 }
 
@@ -377,17 +377,6 @@ function ActivitySection({ from, to }: { from: string; to: string }) {
   }, [from, to]);
 
   if (!act) return null;
-
-  const CATEGORY_LABEL: Record<string, string> = {
-    'cold-pitch': 'Cold pitch',
-    'warm-lead': 'Warm lead',
-    'client': 'Client',
-    'recruiter': 'Recruiter',
-    'intro': 'Intro',
-    'spam': 'Spam',
-    'other': 'Other',
-    'unclassified': 'Not classified',
-  };
 
   return (
     <section className="card p-5 mt-6">
@@ -422,19 +411,26 @@ function ActivitySection({ from, to }: { from: string; to: string }) {
         </div>
       </div>
 
-      {act.byCategory.length > 0 && (
+      {act.byLabel.length > 0 && (
         <>
-          <div className="eyebrow mb-2">Reply rate by category</div>
+          <div className="eyebrow mb-2">Reply rate by label</div>
           <div className="space-y-1.5">
-            {act.byCategory.map((row) => (
-              <div key={row.category} className="flex items-center gap-3 text-[12.5px]">
-                <span className="w-28 text-[var(--color-text-secondary)] truncate">
-                  {CATEGORY_LABEL[row.category] ?? row.category}
+            {act.byLabel.map((row) => (
+              <div key={row.labelId} className="flex items-center gap-3 text-[12.5px]">
+                <span className="w-32 text-[var(--color-text-secondary)] truncate flex items-center gap-1.5">
+                  {row.color && (
+                    <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: row.color }} />
+                  )}
+                  {row.name}
                 </span>
                 <div className="flex-1 h-2 bg-[var(--color-surface)] rounded-full overflow-hidden">
                   <div
-                    className="h-full bg-[var(--color-accent)]"
-                    style={{ width: `${Math.max(2, row.replyRate * 100)}%`, transition: 'width 240ms var(--ease-out-quart)' }}
+                    className="h-full"
+                    style={{
+                      width: `${Math.max(2, row.replyRate * 100)}%`,
+                      background: row.color ?? 'var(--color-accent)',
+                      transition: 'width 240ms var(--ease-out-quart)',
+                    }}
                   />
                 </div>
                 <span className="mono text-[10.5px] text-[var(--color-text-tertiary)] w-20 text-right">

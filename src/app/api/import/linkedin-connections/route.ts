@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { CORS, safeParseArray, optionsResponse } from '@/lib/api-utils';
 import type { Participant } from '@/types';
+import { upsertContact, linkContactToConversation, extractProfileSlug, parseLinkedInDate } from '@/lib/contact-upsert';
 
 // POST { csv: string }  — uploads LinkedIn's Connections.csv export.
 // Format LinkedIn provides:
@@ -156,6 +157,30 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // Upsert a Contact for every CSV row. linkedin-export is our highest
+    // source-priority, so existing weaker enrichment gets overwritten.
+    const contactIdByUrl = new Map<string, string>();
+    let contactsUpserted = 0;
+    for (const r of rows) {
+      const url = canonicalizeUrl(r.url);
+      if (!url) continue;
+      const fullName = `${r.firstName} ${r.lastName}`.trim();
+      if (!fullName) continue;
+      const cid = await upsertContact({
+        profileUrl: url,
+        profileSlug: extractProfileSlug(url),
+        name: fullName,
+        company: r.company || null,
+        role: r.position || null,
+        connectedOn: parseLinkedInDate(r.connectedOn),
+        source: 'linkedin-export',
+      });
+      if (cid) {
+        contactIdByUrl.set(url, cid);
+        contactsUpserted++;
+      }
+    }
+
     // Match against all conversations
     const convs = await prisma.conversation.findMany({
       select: { id: true, participants: true, enrichment: true },
@@ -205,6 +230,13 @@ export async function POST(req: NextRequest) {
       await prisma.conversation.update({ where: { id: c.id }, data: updateData });
       if (participantChanged) matched++;
       if (meta) updatedFields++;
+
+      // Link each contact we know about for this conversation's participants.
+      for (const p of nextParts) {
+        if (!p.profileUrl) continue;
+        const cid = contactIdByUrl.get(p.profileUrl);
+        if (cid) await linkContactToConversation(cid, c.id);
+      }
     }
 
     return NextResponse.json(
@@ -213,6 +245,7 @@ export async function POST(req: NextRequest) {
         rowsParsed: rows.length,
         contactsMatched: matched,
         contactsEnriched: updatedFields,
+        contactsUpserted,
       },
       { headers: CORS },
     );

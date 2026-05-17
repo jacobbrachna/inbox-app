@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { storage } from '@/lib/storage';
 
 // Drag-to-resize for a column. During the drag we update the DOM width
 // DIRECTLY via a ref (no React re-renders) — that's the only way to keep
@@ -13,11 +14,8 @@ export function useResizableColumn(opts: {
   const { storageKey, defaultWidth, min, max } = opts;
 
   const [width, setWidth] = useState<number>(() => {
-    if (typeof window === 'undefined') return defaultWidth;
-    const raw = window.localStorage.getItem(`inboxpro-col-${storageKey}`);
-    if (!raw) return defaultWidth;
-    const n = parseInt(raw, 10);
-    if (Number.isNaN(n)) return defaultWidth;
+    const n = storage.columnWidth.get(storageKey);
+    if (n === null) return defaultWidth;
     return Math.max(min, Math.min(max, n));
   });
 
@@ -28,7 +26,7 @@ export function useResizableColumn(opts: {
   useEffect(() => { widthRef.current = width; }, [width]);
 
   useEffect(() => {
-    try { window.localStorage.setItem(`inboxpro-col-${storageKey}`, String(width)); } catch {}
+    storage.columnWidth.set(storageKey, width);
   }, [storageKey, width]);
 
   const startDrag = useCallback((e: React.MouseEvent) => {

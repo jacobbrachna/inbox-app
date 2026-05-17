@@ -3,6 +3,10 @@ import { prisma } from '@/lib/db';
 import { transformConversations, transformMessages } from '@/lib/transform';
 import { CORS, safeParseArray, optionsResponse } from '@/lib/api-utils';
 import type { Conversation, Message } from '@/types';
+import { linkParticipantsToConversation } from '@/lib/contact-upsert';
+import { detectAutoLabels, applyAutoLabelsToConversation } from '@/lib/auto-label';
+import { hasApiKey } from '@/lib/ai';
+import { createNotification } from '@/lib/notify';
 
 // LinkedIn AttributedText: { text: "..." } or just a string
 function readText(v: unknown): string {
@@ -166,7 +170,7 @@ async function backfillProfileUrlsFromEntities(entities: Record<string, unknown>
 // Persist a typed Conversation to the DB, preserving user-set fields.
 // `sourceCategory` (when known) is LinkedIn's authoritative archive/inbox state
 // for the conv — passes through bridge poll → import to mirror archive both ways.
-async function upsertConversation(c: Conversation, raw?: unknown, sourceCategory?: string) {
+async function upsertConversation(c: Conversation, raw?: unknown, sourceCategory?: string, selfUrn: string | null = null) {
   const existing = await prisma.conversation.findUnique({ where: { id: c.id } });
   const participantsJson = JSON.stringify(c.participants ?? []);
   const incomingLabels = Array.isArray(c.labels) ? c.labels : [];
@@ -274,6 +278,11 @@ async function upsertConversation(c: Conversation, raw?: unknown, sourceCategory
       },
     });
   }
+  // Mirror participants into Contact + ConversationContact. Safe to call
+  // on both create and update paths — linking is idempotent.
+  if (Array.isArray(c.participants) && c.participants.length > 0) {
+    await linkParticipantsToConversation(c.id, c.participants, selfUrn);
+  }
 }
 
 // Upsert messages by ID. NEW messages are inserted; EXISTING messages have
@@ -330,6 +339,100 @@ async function upsertMessages(
         rawData: m._raw ? JSON.stringify(m._raw) : null,
       })),
     });
+
+    // Notification: fire one per import batch for the FIRST inbound message
+    // landing in a known conversation. De-dupes via createNotification's
+    // 30min window so a chatty sync doesn't spam the bell. Skips if this
+    // is a brand-new conversation (no prior messages) — those are covered
+    // by AI-signal notifications once classification runs.
+    const firstInbound = toInsert.find((m) => !m.isFromMe);
+    if (firstInbound && existing.length > 0) {
+      const conv = await prisma.conversation.findUnique({
+        where: { id: conversationId },
+        select: { participants: true, followUpAt: true, followUpSource: true },
+      });
+      let senderName = firstInbound.senderName ?? '';
+      if (!senderName || senderName === 'LinkedIn User') {
+        try {
+          const parts = JSON.parse(conv?.participants ?? '[]');
+          senderName = parts[0]?.name ?? 'A contact';
+        } catch { senderName = 'A contact'; }
+      }
+      const preview = (firstInbound.body ?? '').trim().replace(/\s+/g, ' ').slice(0, 140);
+      await createNotification({
+        kind: 'new-message',
+        title: `New message from ${senderName}`,
+        body: preview || 'New message arrived',
+        conversationId,
+      });
+
+      // Auto-clear AI follow-ups when an inbound reply lands. The follow-up
+      // was a reminder to ping THEM — once they reply, it's resolved. Manual
+      // follow-ups are preserved (the user set them with their own intent).
+      // Re-classify will set a new follow-up if the new reply contains one.
+      if (conv?.followUpAt && conv.followUpSource === 'ai') {
+        await prisma.conversation.update({
+          where: { id: conversationId },
+          data: {
+            followUpAt: null,
+            followUpSource: null,
+            followUpReason: null,
+            followUpConfidence: null,
+            followUpKind: null,
+            followUpActor: null,
+          },
+        });
+      }
+    }
+
+    // Auto-label new inbound messages by regex — ONLY when no API key is
+    // configured. With a key, AI classification is the source of truth and
+    // we skip the regex layer to avoid label conflicts.
+    if (!(await hasApiKey())) {
+      const inboundBodies = toInsert
+        .filter((m) => !m.isFromMe && typeof m.body === 'string' && m.body.length > 0)
+        .map((m) => m.body as string);
+      if (inboundBodies.length > 0) {
+        const combined = inboundBodies.join('\n').slice(0, 4000);
+        const labels = detectAutoLabels(combined);
+        if (labels.length > 0) {
+          await applyAutoLabelsToConversation(conversationId, labels);
+        }
+      }
+    }
+
+    // Outcome update: every new INBOUND message can satisfy unanswered
+    // outbound messages that landed within REPLY_WINDOW_DAYS in this conv.
+    // Walk back, mark unmarked outbounds with this inbound's data.
+    const REPLY_WINDOW_DAYS = 14;
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const newInbound = toInsert
+      .filter((m) => !m.isFromMe && m.sentAt)
+      .map((m) => ({ id: m.id, sentAt: new Date(m.sentAt!) }));
+    if (newInbound.length > 0) {
+      // Earliest inbound in this batch — it's the one that closes any
+      // pending outbound replies.
+      const earliest = newInbound.reduce((a, b) =>
+        a.sentAt.getTime() < b.sentAt.getTime() ? a : b
+      );
+      const windowStart = new Date(earliest.sentAt.getTime() - REPLY_WINDOW_DAYS * DAY_MS);
+      const unanswered = await prisma.message.findMany({
+        where: {
+          conversationId,
+          isFromMe: true,
+          gotReply: false,
+          sentAt: { gte: windowStart, lte: earliest.sentAt },
+        },
+        select: { id: true, sentAt: true },
+      });
+      for (const out of unanswered) {
+        const days = Math.max(0, Math.round((earliest.sentAt.getTime() - out.sentAt.getTime()) / DAY_MS));
+        await prisma.message.update({
+          where: { id: out.id },
+          data: { gotReply: true, replyAt: earliest.sentAt, daysToReply: days },
+        });
+      }
+    }
   }
 
   for (const m of toUpdate) {
@@ -458,7 +561,7 @@ export async function POST(req: NextRequest) {
 
     // Write conversations first so message FKs resolve.
     for (const c of conversations) {
-      await upsertConversation(c, rawConvByUrn.get(c.id), categoryByConvUrn.get(c.id));
+      await upsertConversation(c, rawConvByUrn.get(c.id), categoryByConvUrn.get(c.id), myProfileUrn || null);
     }
 
     // ── Passive enrichment via captured entities ─────────────────────────
@@ -499,6 +602,7 @@ export async function POST(req: NextRequest) {
             where: { id: urn },
             data: { participants: participantsJson },
           });
+          await linkParticipantsToConversation(urn, fromMessages, myProfileUrn || null);
         }
         continue;
       }
@@ -520,6 +624,10 @@ export async function POST(req: NextRequest) {
           },
         });
         knownConvIds.add(urn);
+        // Mirror into Contact + ConversationContact
+        if (fromMessages.length > 0) {
+          await linkParticipantsToConversation(urn, fromMessages, myProfileUrn || null);
+        }
       } catch (e) {
         console.warn('[import] could not create stub conversation for', urn, e);
       }
