@@ -30,7 +30,23 @@ export async function POST(req: NextRequest) {
     const about = typeof body.about === 'string' ? body.about : undefined;
     const prevRoles = Array.isArray(body.prevRoles) ? body.prevRoles : undefined;
     const education = Array.isArray(body.education) ? body.education : undefined;
-    const recentPosts = Array.isArray(body.recentPosts) ? body.recentPosts : undefined;
+    const rawRecentPosts = Array.isArray(body.recentPosts) ? body.recentPosts : undefined;
+    // Defense in depth: even if a stale extension sends back error-widget
+    // text ("Check your connection…") as a "post", drop those at the API
+    // boundary so the DB never accepts them. Matches the client-side guard
+    // in extension/profile-capture.js so newer extensions can't regress us.
+    const POST_ERROR_PHRASES = [
+      'Check your connection',
+      'refresh the page',
+      "This page isn't available",
+      'This page isn’t available',
+      'No posts to show',
+      'Nothing to see here',
+    ];
+    const recentPosts = rawRecentPosts?.filter((p: { text?: unknown }) => {
+      const t = typeof p?.text === 'string' ? p.text : '';
+      return t && !POST_ERROR_PHRASES.some((phrase) => t.includes(phrase));
+    });
 
     // Telemetry: success = we got at least name+(role|company|about). The
     // banner-only case (name + nothing else) means the scraper completed

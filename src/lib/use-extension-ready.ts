@@ -23,8 +23,22 @@ function notify(next: boolean) {
 function ensureObserver() {
   if (observer || typeof document === 'undefined') return;
   ready = check();
-  observer = new MutationObserver(() => notify(check()));
-  observer.observe(document.body, { childList: true, subtree: false });
+  // Primary signal: the bridge announces itself via postMessage on load.
+  // This fires synchronously after the marker is appended.
+  window.addEventListener('message', (ev) => {
+    if (ev.source !== window || !ev.data) return;
+    if (ev.data.type === 'inboxpro-bridge-ready') notify(true);
+  });
+  // Fallback: watch <head> for the marker append (childList only — cheap).
+  // Handles the case where the marker was injected before we mounted but
+  // somehow disappeared, or where we missed the postMessage.
+  const attach = () => {
+    const target = document.head || document.documentElement;
+    observer = new MutationObserver(() => notify(check()));
+    observer.observe(target, { childList: true });
+  };
+  if (document.head) attach();
+  else document.addEventListener('DOMContentLoaded', attach, { once: true });
 }
 
 /**
@@ -33,12 +47,13 @@ function ensureObserver() {
  * every call site subscribes to the same source instead of polling.
  */
 export function useExtensionReady(): boolean {
-  const [isReady, setIsReady] = useState<boolean>(() => check());
+  // Start false on both server and client so the initial markup matches
+  // and hydration doesn't error. The mount effect then syncs to truth.
+  const [isReady, setIsReady] = useState<boolean>(false);
 
   useEffect(() => {
     ensureObserver();
-    // Sync with the shared source on mount in case it already flipped.
-    setIsReady(ready);
+    setIsReady(check());
     subscribers.add(setIsReady);
     return () => {
       subscribers.delete(setIsReady);

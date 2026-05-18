@@ -112,7 +112,11 @@ export async function POST(req: NextRequest) {
         const sameName = !!q.name && q.name.toLowerCase() === name.toLowerCase();
         if (!sameUrn && !sameName) return q;
         const merged = { ...q };
-        if (!q.headline && headline) { merged.headline = headline; changed = true; }
+        // Headline: always overwrite with the SN-profile-API value when we
+        // have one. That endpoint is authoritative; a stale or corrupted
+        // local value (e.g. a message body that ended up here from older
+        // imports) should be replaced, not preserved.
+        if (headline && q.headline !== headline) { merged.headline = headline; changed = true; }
         if (!q.avatarUrl && avatarUrl) { merged.avatarUrl = avatarUrl; changed = true; }
         if (!q.name && name) { merged.name = name; changed = true; }
         return merged;

@@ -858,7 +858,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // Calling Voyager directly from this background worker doesn't work in
 // practice — LinkedIn returns 403/410 because the request lacks page-origin
 // context. Hidden-tab → intercept is the reliable path.
-async function enrichLinkedInProfile({ profileUrn, profileUrl }) {
+async function enrichLinkedInProfile({ profileUrn, profileUrl, sourceTabId }) {
   const auth = await getLinkedInAuth();
   if (!auth) return { ok: false, reason: 'not-logged-in' };
 
@@ -881,12 +881,14 @@ async function enrichLinkedInProfile({ profileUrn, profileUrl }) {
     // explicit consent to run the auto-capture flow (banner + scrape + POST).
     appInitiatedTabs.add(tab.id);
     await waitForTabComplete(tab.id, 25_000);
-    // Race: 18s safety timeout OR explicit captureComplete signal from
-    // profile-capture.js. Whichever fires first wins. Close-on-capture
-    // means the user gets back to their previous tab faster.
+    // The Refresh-profile path uses user-driven capture (banner + scroll +
+    // observer + 5s countdown). The user paces it themselves, so we need
+    // a much longer wait than the old auto-capture's 25s. Profile-capture
+    // hard-caps at 90s + 5s countdown = 95s; we wait 120s to be safe.
+    // Captures normally finish in 10-30s once the user scrolls through.
     const tabId = tab.id;
     await new Promise((resolve) => {
-      const timeout = setTimeout(resolve, 18_000);
+      const timeout = setTimeout(resolve, 120_000);
       captureCompleteResolvers.set(tabId, () => {
         clearTimeout(timeout);
         captureCompleteResolvers.delete(tabId);
@@ -899,6 +901,13 @@ async function enrichLinkedInProfile({ profileUrn, profileUrl }) {
     if (tab?.id) {
       captureCompleteResolvers.delete(tab.id);
       try { await chrome.tabs.remove(tab.id); } catch {}
+    }
+    // Restore focus to whichever tab kicked this off (usually the InboxPro
+    // tab). Without this, Chrome moves focus to the last-active tab in the
+    // window — which might be unrelated. Best-effort: swallow errors so a
+    // missing source tab doesn't bubble up.
+    if (sourceTabId != null) {
+      try { await chrome.tabs.update(sourceTabId, { active: true }); } catch {}
     }
   }
 
@@ -2320,6 +2329,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const result = await enrichLinkedInProfile({
         profileUrn: message.profileUrn,
         profileUrl: message.profileUrl,
+        // Tab that requested the enrichment — restore focus to it after
+        // the capture tab closes so the user lands back on InboxPro.
+        sourceTabId: sender?.tab?.id,
       });
       sendResponse(result);
     })();
