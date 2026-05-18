@@ -1,12 +1,16 @@
 // Tauri entrypoint. Boots the desktop window pointing at the local
 // Next.js server, which we auto-launch via scripts/launch-server.sh.
-// Window stays hidden until the server is reachable on :3030.
+// On a fresh Mac with no ~/Documents/inbox-app, we run scripts/bootstrap.sh
+// (bundled inside the .app) in a Terminal window first to clone the repo
+// and install everything, then proceed with the normal launch.
 
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
-use tauri::{Manager, RunEvent, WindowEvent};
+use tauri::{AppHandle, Manager, RunEvent, WindowEvent};
+use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+use tauri_plugin_updater::UpdaterExt;
 
 // Resolve `~/Documents/inbox-app` — where the installer places the app
 // and where launch-server.sh lives. Falls back to cwd in dev when the
@@ -19,6 +23,72 @@ fn install_dir() -> PathBuf {
         }
     }
     std::env::current_dir().unwrap_or_default()
+}
+
+// Canonical "is the install ready" check — separated from install_dir()
+// so we can detect first-run state without committing to a path.
+fn install_ready() -> bool {
+    if let Some(home) = std::env::var_os("HOME") {
+        let p = PathBuf::from(home).join("Documents").join("inbox-app");
+        return p.join("scripts/launch-server.sh").exists() && p.join("node_modules").exists();
+    }
+    false
+}
+
+// Spawn bootstrap.sh (bundled inside the .app as a resource) in a real
+// Terminal window so the user sees install progress. Returns after the
+// script finishes (signaled by `ok` written to the status file) or
+// errors. Returns true on success.
+fn run_bootstrap(app: &tauri::AppHandle) -> bool {
+    let resolver = app.path();
+    // Tauri 2 puts bundle resources under the Resources dir of the .app.
+    let script_path = match resolver.resolve("scripts/bootstrap.sh", tauri::path::BaseDirectory::Resource) {
+        Ok(p) => p,
+        Err(e) => {
+            log::error!("bootstrap script resource not found: {}", e);
+            return false;
+        }
+    };
+
+    // Reset status file so we know it's a fresh run.
+    let status_path = "/tmp/inboxpro-bootstrap-status";
+    let _ = std::fs::remove_file(status_path);
+
+    log::info!("opening Terminal to run {:?}", script_path);
+    let osa_cmd = format!(
+        "tell application \"Terminal\" to activate\n\
+         tell application \"Terminal\" to do script \"bash '{}'; exit\"",
+        script_path.display()
+    );
+    let _ = Command::new("/usr/bin/osascript")
+        .args(["-e", &osa_cmd])
+        .spawn();
+
+    // Poll for completion. bootstrap.sh writes "ok" or "fail" to the
+    // status file. Hard ceiling of 30 min just in case Homebrew + Node
+    // are being installed from scratch on a slow connection.
+    let deadline = std::time::Instant::now() + Duration::from_secs(30 * 60);
+    while std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_secs(1));
+        if let Ok(s) = std::fs::read_to_string(status_path) {
+            let v = s.trim();
+            if v == "ok" {
+                return true;
+            }
+            if v == "fail" {
+                log::error!("bootstrap reported failure");
+                return false;
+            }
+        }
+        // Also accept "install_ready()" returning true — bootstrap may
+        // succeed faster than its final status write, or the user may
+        // have run it manually and we can pick up the state.
+        if install_ready() {
+            return true;
+        }
+    }
+    log::error!("bootstrap timed out");
+    false
 }
 
 fn port_open(port: u16) -> bool {
@@ -60,6 +130,47 @@ fn wait_for_server() -> bool {
     false
 }
 
+// Check the configured updater endpoint for a new version. If one is
+// available, prompt the user; on Yes, download + install + restart.
+// Best-effort: any error is logged and ignored so a flaky network never
+// breaks app launch. Run in a background task a few seconds after boot.
+async fn check_for_updates(app: AppHandle) {
+    let updater = match app.updater() {
+        Ok(u) => u,
+        Err(e) => { log::warn!("updater unavailable: {}", e); return; }
+    };
+    let update = match updater.check().await {
+        Ok(Some(u)) => u,
+        Ok(None) => { log::info!("already on latest version"); return; }
+        Err(e) => { log::warn!("update check failed: {}", e); return; }
+    };
+    log::info!("update available: v{}", update.version);
+
+    // show_blocking() returns the user's choice synchronously — much
+    // cleaner than the callback variant when we're already in an async task.
+    let confirmed = app
+        .dialog()
+        .message(format!("InboxPro {} is ready to install.", update.version))
+        .kind(MessageDialogKind::Info)
+        .title("Update available")
+        .buttons(tauri_plugin_dialog::MessageDialogButtons::OkCancelCustom(
+            "Install and Restart".into(),
+            "Later".into(),
+        ))
+        .blocking_show();
+    if !confirmed {
+        log::info!("user declined update");
+        return;
+    }
+    if let Err(e) = update.download_and_install(|_, _| {}, || {}).await {
+        log::error!("update install failed: {}", e);
+        return;
+    }
+    log::info!("update installed — restarting");
+    stop_server();
+    app.restart();
+}
+
 // Kills the Next.js child process on app exit. npm spawns `next-server`
 // as a detached child, so killing the npm parent alone leaves the real
 // server orphaned on :3030. We pkill the parent PID's descendants, then
@@ -91,12 +202,11 @@ fn stop_server() {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Start the server BEFORE Tauri creates the window so the window has
-    // a live URL to load. start_server() is non-blocking (the script
-    // detaches), then wait_for_server() polls until 3030 responds.
-    start_server();
-    wait_for_server();
-
+    // We need an AppHandle to resolve the bundled bootstrap.sh resource,
+    // so we build the Tauri app first (without showing windows) and only
+    // then do the install-ready check + server startup. The main window
+    // is `visible: false` in config — it stays hidden until we show it
+    // explicitly below.
     let app = tauri::Builder::default()
         // Single-instance: if the user double-clicks InboxPro while a
         // copy is already running, the second launch sends a signal to
@@ -107,6 +217,12 @@ pub fn run() {
                 let _ = window.set_focus();
             }
         }))
+        // Auto-updater: pulls latest.json from the GitHub Releases
+        // endpoint, verifies the bundle signature against the embedded
+        // pubkey, downloads and applies on user consent.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        // Dialog plugin: backs the update-available confirm prompt.
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -115,21 +231,48 @@ pub fn run() {
                         .build(),
                 )?;
             }
-            // Reveal the main window after a brief moment so the user
-            // doesn't see a blank flash while Next.js renders the first
-            // page. visible:false in config, then we show here.
-            if let Some(window) = app.get_webview_window("main") {
-                let w = window.clone();
-                std::thread::spawn(move || {
-                    std::thread::sleep(Duration::from_millis(800));
-                    let _ = w.show();
-                    let _ = w.set_focus();
+
+            // First-run check: if ~/Documents/inbox-app isn't set up,
+            // spawn the bootstrap script in Terminal. Block here on a
+            // background thread so we don't freeze the UI thread, then
+            // continue with server startup once it's done.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                if !install_ready() {
+                    log::info!("install not found — running bootstrap");
+                    if !run_bootstrap(&handle) {
+                        log::error!("bootstrap failed — exiting");
+                        handle.exit(1);
+                        return;
+                    }
+                }
+                start_server();
+                wait_for_server();
+                if let Some(window) = handle.get_webview_window("main") {
+                    // Navigate now that the server is ready (the window
+                    // was created pointing at :3030 but may have hit
+                    // ERR_CONNECTION_REFUSED if Tauri was faster than us).
+                    let _ = window.eval("window.location.replace('http://localhost:3030/');");
+                    // Tiny grace period for the first paint, then show.
+                    std::thread::sleep(Duration::from_millis(600));
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+                // Check for updates a few seconds after the UI is visible
+                // so we don't compete with the boot path for network or
+                // CPU. Best-effort — failures are silently logged.
+                let update_handle = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    tauri::async_runtime::spawn_blocking(|| std::thread::sleep(Duration::from_secs(5)))
+                        .await.ok();
+                    check_for_updates(update_handle).await;
                 });
-                // Window close → kill the Next.js server AND exit the
-                // app entirely. On macOS apps typically stay running
-                // after the last window closes, but for InboxPro we
-                // want quit-on-close — there's no reason to keep a
-                // headless server alive when the UI is gone.
+            });
+
+            // Wire window close → server kill → app exit. Done outside
+            // the bootstrap thread because window events fire on the
+            // main thread regardless of when we register.
+            if let Some(window) = app.get_webview_window("main") {
                 let handle = app.handle().clone();
                 window.on_window_event(move |event| {
                     if let WindowEvent::CloseRequested { .. } = event {

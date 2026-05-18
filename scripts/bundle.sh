@@ -48,6 +48,8 @@ zip -r "$ZIP_PATH" . \
   -x "*.tsbuildinfo" \
   -x "next-env.d.ts" \
   -x ".env*" \
+  -x "src-tauri/target/*" \
+  -x "src-tauri/.tauri-keys" \
   > /dev/null
 
 SIZE=$(du -h "$ZIP_PATH" | cut -f1)
