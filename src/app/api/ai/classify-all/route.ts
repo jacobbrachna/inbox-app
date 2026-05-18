@@ -44,7 +44,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json(
       {
-        ids: convs.map((c) => c.id),
+        ids: convs.map((c: { id: string }) => c.id),
         eligible: total,
         toClassify: convs.length,
         force,

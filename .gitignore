@@ -59,3 +59,4 @@ li-samples/
 # Local DB backups (created ad-hoc during migrations)
 backups/
 dev.db.backup-*
+src-tauri/resources/

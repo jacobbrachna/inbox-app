@@ -1,0 +1,7 @@
+# Node sidecar binaries are 100MB+ each — too big for git. Re-fetch with
+# scripts/fetch-node-sidecar.sh before building. Keep the directory
+# tracked via this .gitignore.
+node-*-apple-darwin
+node-*-pc-windows-msvc.exe
+node-*-unknown-linux-gnu
+*.tar.xz

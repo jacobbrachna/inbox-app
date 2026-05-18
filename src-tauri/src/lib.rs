@@ -1,95 +1,67 @@
-// Tauri entrypoint. Boots the desktop window pointing at the local
-// Next.js server, which we auto-launch via scripts/launch-server.sh.
-// On a fresh Mac with no ~/Documents/inbox-app, we run scripts/bootstrap.sh
-// (bundled inside the .app) in a Terminal window first to clone the repo
-// and install everything, then proceed with the normal launch.
+// Tauri entrypoint for the self-contained InboxPro.app.
+//
+// Everything ships inside the .app bundle:
+//   • Node.js binary (sidecar at Contents/MacOS/node-aarch64-apple-darwin)
+//   • The prebuilt Next.js standalone server (Resources/server/)
+//   • Prisma schema + migrations (Resources/prisma/)
+//   • Empty seed DB with migrations pre-applied (Resources/prisma/dev.db.seed)
+//
+// On launch we copy the seed DB to a writable location the first time,
+// spawn the bundled Node running the bundled server, wait for it to bind
+// :3030, then show the window. On quit we kill the Node child.
 
 use std::net::TcpStream;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
+use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{AppHandle, Manager, RunEvent, WindowEvent};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tauri_plugin_updater::UpdaterExt;
 
-// Resolve `~/Documents/inbox-app` — where the installer places the app
-// and where launch-server.sh lives. Falls back to cwd in dev when the
-// Tauri binary is launched from inside the repo.
-fn install_dir() -> PathBuf {
-    if let Some(home) = std::env::var_os("HOME") {
-        let p = PathBuf::from(home).join("Documents").join("inbox-app");
-        if p.join("scripts/launch-server.sh").exists() {
-            return p;
-        }
-    }
-    std::env::current_dir().unwrap_or_default()
+// The Node child we spawned. Stored globally so the quit handler can
+// kill it on shutdown without juggling AppHandles.
+static NODE_CHILD: Mutex<Option<Child>> = Mutex::new(None);
+
+// ── Paths ─────────────────────────────────────────────────────────────
+
+// Writable storage for the user's SQLite DB + logs + future state.
+// macOS convention: ~/Library/Application Support/<bundle-id>/
+fn app_data_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(|h| {
+        PathBuf::from(h)
+            .join("Library")
+            .join("Application Support")
+            .join("com.jacobbrachna.inboxpro")
+    })
 }
 
-// Canonical "is the install ready" check — separated from install_dir()
-// so we can detect first-run state without committing to a path.
-fn install_ready() -> bool {
-    if let Some(home) = std::env::var_os("HOME") {
-        let p = PathBuf::from(home).join("Documents").join("inbox-app");
-        return p.join("scripts/launch-server.sh").exists() && p.join("node_modules").exists();
-    }
-    false
+fn writable_db_path() -> Option<PathBuf> {
+    app_data_dir().map(|d| d.join("dev.db"))
 }
 
-// Spawn bootstrap.sh (bundled inside the .app as a resource) in a real
-// Terminal window so the user sees install progress. Returns after the
-// script finishes (signaled by `ok` written to the status file) or
-// errors. Returns true on success.
-fn run_bootstrap(app: &tauri::AppHandle) -> bool {
-    let resolver = app.path();
-    // Tauri 2 puts bundle resources under the Resources dir of the .app.
-    let script_path = match resolver.resolve("scripts/bootstrap.sh", tauri::path::BaseDirectory::Resource) {
-        Ok(p) => p,
-        Err(e) => {
-            log::error!("bootstrap script resource not found: {}", e);
-            return false;
-        }
-    };
+// ── First-run DB seeding ──────────────────────────────────────────────
 
-    // Reset status file so we know it's a fresh run.
-    let status_path = "/tmp/inboxpro-bootstrap-status";
-    let _ = std::fs::remove_file(status_path);
-
-    log::info!("opening Terminal to run {:?}", script_path);
-    let osa_cmd = format!(
-        "tell application \"Terminal\" to activate\n\
-         tell application \"Terminal\" to do script \"bash '{}'; exit\"",
-        script_path.display()
-    );
-    let _ = Command::new("/usr/bin/osascript")
-        .args(["-e", &osa_cmd])
-        .spawn();
-
-    // Poll for completion. bootstrap.sh writes "ok" or "fail" to the
-    // status file. Hard ceiling of 30 min just in case Homebrew + Node
-    // are being installed from scratch on a slow connection.
-    let deadline = std::time::Instant::now() + Duration::from_secs(30 * 60);
-    while std::time::Instant::now() < deadline {
-        std::thread::sleep(Duration::from_secs(1));
-        if let Ok(s) = std::fs::read_to_string(status_path) {
-            let v = s.trim();
-            if v == "ok" {
-                return true;
-            }
-            if v == "fail" {
-                log::error!("bootstrap reported failure");
-                return false;
-            }
-        }
-        // Also accept "install_ready()" returning true — bootstrap may
-        // succeed faster than its final status write, or the user may
-        // have run it manually and we can pick up the state.
-        if install_ready() {
-            return true;
-        }
+// Copy the bundled seed DB to the user's writable location on first
+// launch. Idempotent: skips if dev.db already exists.
+fn ensure_writable_db(app: &AppHandle) -> Result<PathBuf, String> {
+    let target = writable_db_path().ok_or("no HOME directory")?;
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {:?}: {}", parent, e))?;
     }
-    log::error!("bootstrap timed out");
-    false
+    if target.exists() {
+        return Ok(target);
+    }
+    let seed = app
+        .path()
+        .resolve("resources/prisma/dev.db.seed", tauri::path::BaseDirectory::Resource)
+        .map_err(|e| format!("seed db missing from bundle: {}", e))?;
+    std::fs::copy(&seed, &target).map_err(|e| format!("copy seed: {}", e))?;
+    log::info!("seeded fresh dev.db at {:?}", target);
+    Ok(target)
 }
+
+// ── Server lifecycle ──────────────────────────────────────────────────
 
 fn port_open(port: u16) -> bool {
     let addr = format!("127.0.0.1:{}", port);
@@ -100,40 +72,99 @@ fn port_open(port: u16) -> bool {
     }
 }
 
-// Apps launched from Finder inherit a minimal PATH that doesn't include
-// /opt/homebrew/bin or nvm paths. Shell out via `bash -lc` so the user's
-// shell init sets node/npm correctly.
-fn start_server() {
-    let dir = install_dir();
-    let script = dir.join("scripts/launch-server.sh");
-    if !script.exists() {
-        log::warn!("launch-server.sh not found at {:?} — assuming user runs server manually", script);
-        return;
+// Boot the bundled Next.js server using the bundled Node binary. Stores
+// the child handle so we can kill it on app exit.
+fn start_server(app: &AppHandle, db_path: &PathBuf) -> Result<(), String> {
+    let resolver = app.path();
+    // Tauri ships externalBin entries in Contents/MacOS/ with the
+    // target-triple suffix stripped. So "binaries/node" in tauri.conf.json
+    // becomes Contents/MacOS/node at runtime. We resolve via the
+    // current_exe() parent because BaseDirectory::Resource points at
+    // Contents/Resources/, not Contents/MacOS/.
+    let exe = std::env::current_exe().map_err(|e| format!("current_exe: {}", e))?;
+    let exe_dir = exe.parent().ok_or("current_exe has no parent")?;
+    let node = exe_dir.join("node");
+    if !node.exists() {
+        return Err(format!("node sidecar missing at {:?}", node));
     }
-    let cmd = format!("cd {:?} && bash {:?}", dir, script);
-    log::info!("starting server: {}", cmd);
-    let _ = Command::new("/bin/bash")
-        .args(["-lc", &cmd])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
+    let server_dir = resolver
+        .resolve("resources/server", tauri::path::BaseDirectory::Resource)
+        .map_err(|e| format!("server dir missing from bundle: {}", e))?;
+    let server_js = server_dir.join("server.js");
+    if !server_js.exists() {
+        return Err(format!("server.js missing at {:?}", server_js));
+    }
+
+    log::info!("spawning {:?} {:?}", node, server_js);
+    // Route Node's stdout+stderr to a known log file. Without this we
+    // can't see why Node exits when bundled (it's silent from Finder
+    // launches). Users can `tail -f /tmp/inboxpro-server.log` if
+    // something looks wrong.
+    let log_path = std::env::var_os("HOME")
+        .map(|h| PathBuf::from(h).join("Library/Logs/InboxPro/server.log"))
+        .unwrap_or_else(|| PathBuf::from("/tmp/inboxpro-server.log"));
+    if let Some(parent) = log_path.parent() { let _ = std::fs::create_dir_all(parent); }
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .map_err(|e| format!("open log {:?}: {}", log_path, e))?;
+    let stderr_log = log_file.try_clone().map_err(|e| format!("clone log: {}", e))?;
+    let child = Command::new(&node)
+        .arg(&server_js)
+        .current_dir(&server_dir)
+        .env("PORT", "3030")
+        .env("HOSTNAME", "127.0.0.1")
+        .env("DATABASE_URL", format!("file:{}", db_path.display()))
+        .env("NODE_ENV", "production")
+        .stdout(Stdio::from(log_file))
+        .stderr(Stdio::from(stderr_log))
+        .spawn()
+        .map_err(|e| format!("spawn node: {}", e))?;
+    log::info!("server pid {} → log at {:?}", child.id(), log_path);
+    *NODE_CHILD.lock().unwrap() = Some(child);
+    Ok(())
 }
 
-// Block until the server responds, up to 30s. Returns true on success.
-fn wait_for_server() -> bool {
-    for _ in 0..60 {
+// Block until the server responds on :3030. Returns true on success.
+fn wait_for_server(timeout_secs: u64) -> bool {
+    let deadline = std::time::Instant::now() + Duration::from_secs(timeout_secs);
+    while std::time::Instant::now() < deadline {
         if port_open(3030) {
             return true;
         }
-        std::thread::sleep(Duration::from_millis(500));
+        std::thread::sleep(Duration::from_millis(250));
     }
     false
 }
 
-// Check the configured updater endpoint for a new version. If one is
-// available, prompt the user; on Yes, download + install + restart.
-// Best-effort: any error is logged and ignored so a flaky network never
-// breaks app launch. Run in a background task a few seconds after boot.
+// Kill the Node child on app exit. Belt-and-braces: try the tracked
+// handle first, then sweep anything still bound to :3030.
+fn stop_server() {
+    if let Some(mut child) = NODE_CHILD.lock().unwrap().take() {
+        log::info!("killing node child pid {}", child.id());
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    // Sweep — covers cases where the tracked handle got out of sync.
+    if let Ok(out) = Command::new("/usr/sbin/lsof")
+        .args(["-nP", "-iTCP:3030", "-sTCP:LISTEN", "-t"])
+        .output()
+    {
+        if let Ok(s) = String::from_utf8(out.stdout) {
+            for line in s.lines() {
+                if let Ok(pid) = line.trim().parse::<i32>() {
+                    let _ = Command::new("/bin/kill")
+                        .args(["-TERM", &pid.to_string()])
+                        .status();
+                }
+            }
+        }
+    }
+}
+
+// ── Auto-updater ──────────────────────────────────────────────────────
+
 async fn check_for_updates(app: AppHandle) {
     let updater = match app.updater() {
         Ok(u) => u,
@@ -141,13 +172,10 @@ async fn check_for_updates(app: AppHandle) {
     };
     let update = match updater.check().await {
         Ok(Some(u)) => u,
-        Ok(None) => { log::info!("already on latest version"); return; }
+        Ok(None) => { log::info!("on latest"); return; }
         Err(e) => { log::warn!("update check failed: {}", e); return; }
     };
     log::info!("update available: v{}", update.version);
-
-    // show_blocking() returns the user's choice synchronously — much
-    // cleaner than the callback variant when we're already in an async task.
     let confirmed = app
         .dialog()
         .message(format!("InboxPro {} is ready to install.", update.version))
@@ -158,70 +186,27 @@ async fn check_for_updates(app: AppHandle) {
             "Later".into(),
         ))
         .blocking_show();
-    if !confirmed {
-        log::info!("user declined update");
-        return;
-    }
+    if !confirmed { return; }
     if let Err(e) = update.download_and_install(|_, _| {}, || {}).await {
         log::error!("update install failed: {}", e);
         return;
     }
-    log::info!("update installed — restarting");
     stop_server();
     app.restart();
 }
 
-// Kills the Next.js child process on app exit. npm spawns `next-server`
-// as a detached child, so killing the npm parent alone leaves the real
-// server orphaned on :3030. We pkill the parent PID's descendants, then
-// kill anything still bound to the port as a final sweep.
-fn stop_server() {
-    let pidfile = "/tmp/inboxpro-prod.pid";
-    if let Ok(s) = std::fs::read_to_string(pidfile) {
-        if let Ok(pid) = s.trim().parse::<i32>() {
-            log::info!("stopping server pid {} (and descendants)", pid);
-            // pkill -P: matches children of `pid` and signals them
-            let _ = Command::new("/usr/bin/pkill").args(["-TERM", "-P", &pid.to_string()]).status();
-            let _ = Command::new("/bin/kill").args(["-TERM", &pid.to_string()]).status();
-        }
-        let _ = std::fs::remove_file(pidfile);
-    }
-    // Belt-and-braces: kill anything still holding :3030 — covers cases
-    // where pkill missed a grandchild or the pidfile was stale.
-    if let Ok(out) = Command::new("/usr/sbin/lsof").args(["-nP", "-iTCP:3030", "-sTCP:LISTEN", "-t"]).output() {
-        if let Ok(s) = String::from_utf8(out.stdout) {
-            for line in s.lines() {
-                if let Ok(pid) = line.trim().parse::<i32>() {
-                    log::info!("port-sweep kill pid {}", pid);
-                    let _ = Command::new("/bin/kill").args(["-TERM", &pid.to_string()]).status();
-                }
-            }
-        }
-    }
-}
+// ── Boot ──────────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // We need an AppHandle to resolve the bundled bootstrap.sh resource,
-    // so we build the Tauri app first (without showing windows) and only
-    // then do the install-ready check + server startup. The main window
-    // is `visible: false` in config — it stays hidden until we show it
-    // explicitly below.
     let app = tauri::Builder::default()
-        // Single-instance: if the user double-clicks InboxPro while a
-        // copy is already running, the second launch sends a signal to
-        // the first (which raises its window) and exits.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
                 let _ = window.set_focus();
             }
         }))
-        // Auto-updater: pulls latest.json from the GitHub Releases
-        // endpoint, verifies the bundle signature against the embedded
-        // pubkey, downloads and applies on user consent.
         .plugin(tauri_plugin_updater::Builder::new().build())
-        // Dialog plugin: backs the update-available confirm prompt.
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             if cfg!(debug_assertions) {
@@ -232,35 +217,35 @@ pub fn run() {
                 )?;
             }
 
-            // First-run check: if ~/Documents/inbox-app isn't set up,
-            // spawn the bootstrap script in Terminal. Block here on a
-            // background thread so we don't freeze the UI thread, then
-            // continue with server startup once it's done.
+            // Boot sequence on a background thread so we don't block the
+            // main thread (which Tauri needs to run the event loop).
             let handle = app.handle().clone();
             std::thread::spawn(move || {
-                if !install_ready() {
-                    log::info!("install not found — running bootstrap");
-                    if !run_bootstrap(&handle) {
-                        log::error!("bootstrap failed — exiting");
+                let db_path = match ensure_writable_db(&handle) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        log::error!("db seed failed: {}", e);
                         handle.exit(1);
                         return;
                     }
+                };
+                if let Err(e) = start_server(&handle, &db_path) {
+                    log::error!("server start failed: {}", e);
+                    handle.exit(1);
+                    return;
                 }
-                start_server();
-                wait_for_server();
+                if !wait_for_server(30) {
+                    log::error!("server didn't bind :3030 within 30s");
+                    handle.exit(1);
+                    return;
+                }
                 if let Some(window) = handle.get_webview_window("main") {
-                    // Navigate now that the server is ready (the window
-                    // was created pointing at :3030 but may have hit
-                    // ERR_CONNECTION_REFUSED if Tauri was faster than us).
                     let _ = window.eval("window.location.replace('http://localhost:3030/');");
-                    // Tiny grace period for the first paint, then show.
                     std::thread::sleep(Duration::from_millis(600));
                     let _ = window.show();
                     let _ = window.set_focus();
                 }
-                // Check for updates a few seconds after the UI is visible
-                // so we don't compete with the boot path for network or
-                // CPU. Best-effort — failures are silently logged.
+                // Update check, deferred so we don't fight the boot path.
                 let update_handle = handle.clone();
                 tauri::async_runtime::spawn(async move {
                     tauri::async_runtime::spawn_blocking(|| std::thread::sleep(Duration::from_secs(5)))
@@ -269,9 +254,10 @@ pub fn run() {
                 });
             });
 
-            // Wire window close → server kill → app exit. Done outside
-            // the bootstrap thread because window events fire on the
-            // main thread regardless of when we register.
+            // Window close → kill server → exit. macOS apps normally
+            // stay running after the last window closes; we want
+            // quit-on-close because the headless server is useless
+            // without the UI.
             if let Some(window) = app.get_webview_window("main") {
                 let handle = app.handle().clone();
                 window.on_window_event(move |event| {
@@ -287,10 +273,6 @@ pub fn run() {
         .expect("error while running tauri application");
 
     app.run(|_app, event| {
-        // Belt-and-braces shutdown: ExitRequested fires before exit,
-        // Exit fires AFTER. Either way we call stop_server again so a
-        // server process can't outlive the app even if the window-close
-        // handler missed it.
         match event {
             RunEvent::ExitRequested { .. } | RunEvent::Exit => stop_server(),
             _ => {}
