@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Pre-sign every native binary (Node.js sidecar, .node bindings, .dylib)
-# that will end up inside InboxPro.app's Resources/. Apple's notarytool
+# that will end up inside Relay.app's Resources/. Apple's notarytool
 # requires every Mach-O file to be signed with Developer ID + secure
 # timestamp + hardened runtime — Tauri only deep-signs the bundle root,
 # so we have to handle the standalone tree ourselves before bundling.

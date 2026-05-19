@@ -26,9 +26,15 @@ export async function GET(req: NextRequest) {
   const to = toParam ? new Date(toParam) : new Date();
   const from = fromParam ? new Date(fromParam) : new Date(Date.now() - 30 * DAY_MS);
 
-  // Fetch all messages in/around the window. We pull a bit before "from" so
-  // we can detect "first message in the window had a reply that fell outside".
+  // Only pull conversations active in (or just before) the window — at scale
+  // this is the difference between fetching 1200+ convs vs ~100. Without this
+  // bound, Prisma's `messages` relation fetch hits SQLite's bind-parameter
+  // limit and the whole call errors. Going back 30d before `from` gives us
+  // enough history to detect "first message in window had a reply outside it"
+  // and to compute REPLY_WINDOW_DAYS lookback.
+  const lookback = new Date(from.getTime() - REPLY_WINDOW_DAYS * 2 * DAY_MS);
   const allConvs: ConvWithMessages[] = await prisma.conversation.findMany({
+    where: { lastMessageAt: { gte: lookback } },
     select: {
       id: true,
       labels: true,

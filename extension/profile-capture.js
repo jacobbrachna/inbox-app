@@ -1,6 +1,6 @@
 // Profile-page capture. Runs on linkedin.com/in/* pages.
 // When LinkedIn finishes rendering the profile, we read the meta tags (most
-// stable surface — survives React UI shuffles) and post the data to InboxPro
+// stable surface — survives React UI shuffles) and post the data to Relay
 // for participant matching. Zero LinkedIn API calls — we read what the
 // browser already rendered.
 //
@@ -24,9 +24,9 @@
     try {
       const style = document.createElement('style');
       style.textContent = `
-        @keyframes inboxpro-capture-in { from { opacity:0; transform: translateY(8px); } to { opacity:1; transform: translateY(0); } }
-        @keyframes inboxpro-capture-pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(10,102,194,.32); } 50% { box-shadow: 0 0 0 6px rgba(10,102,194,0); } }
-        #inboxpro-capture-banner {
+        @keyframes relay-capture-in { from { opacity:0; transform: translateY(8px); } to { opacity:1; transform: translateY(0); } }
+        @keyframes relay-capture-pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(10,102,194,.32); } 50% { box-shadow: 0 0 0 6px rgba(10,102,194,0); } }
+        #relay-capture-banner {
           position: fixed; bottom: 24px; right: 24px; z-index: 2147483647;
           background: #FFFFFF; color: rgba(0,0,0,.9);
           border-radius: 8px;
@@ -34,48 +34,48 @@
           box-shadow: 0 0 0 1px rgba(0,0,0,.08), 0 4px 12px rgba(0,0,0,.15);
           font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', system-ui, sans-serif;
           font-size: 14px;
-          animation: inboxpro-capture-in 240ms cubic-bezier(.25,1,.5,1);
+          animation: relay-capture-in 240ms cubic-bezier(.25,1,.5,1);
           -webkit-font-smoothing: antialiased;
         }
         @media (prefers-color-scheme: dark) {
-          #inboxpro-capture-banner { background: #1B1F23; color: rgba(255,255,255,.9); box-shadow: 0 0 0 1px rgba(255,255,255,.1), 0 4px 12px rgba(0,0,0,.5); }
-          #inboxpro-capture-banner .inboxpro-cap-phase { color: rgba(255,255,255,.6) !important; }
+          #relay-capture-banner { background: #1B1F23; color: rgba(255,255,255,.9); box-shadow: 0 0 0 1px rgba(255,255,255,.1), 0 4px 12px rgba(0,0,0,.5); }
+          #relay-capture-banner .relay-cap-phase { color: rgba(255,255,255,.6) !important; }
         }
-        #inboxpro-capture-banner .inboxpro-cap-header { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
-        #inboxpro-capture-banner .inboxpro-cap-tile {
+        #relay-capture-banner .relay-cap-header { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+        #relay-capture-banner .relay-cap-tile {
           width: 32px; height: 32px; border-radius: 50%;
           background: #0A66C2; color: #FFFFFF;
           display: flex; align-items: center; justify-content: center;
           flex-shrink: 0; font-weight: 700; font-size: 12px; letter-spacing: 0.3px;
-          animation: inboxpro-capture-pulse 1.8s ease-in-out infinite;
+          animation: relay-capture-pulse 1.8s ease-in-out infinite;
         }
-        #inboxpro-capture-banner .inboxpro-cap-tile.done { animation: none; background: #057642; }
-        #inboxpro-capture-banner .inboxpro-cap-title { flex: 1; font-weight: 600; font-size: 14px; line-height: 1.3; }
-        #inboxpro-capture-banner .inboxpro-cap-phase {
+        #relay-capture-banner .relay-cap-tile.done { animation: none; background: #057642; }
+        #relay-capture-banner .relay-cap-title { flex: 1; font-weight: 600; font-size: 14px; line-height: 1.3; }
+        #relay-capture-banner .relay-cap-phase {
           font-size: 12px; color: rgba(0,0,0,.6); margin-top: 2px; font-weight: 400;
         }
-        #inboxpro-capture-banner .inboxpro-cap-bar {
+        #relay-capture-banner .relay-cap-bar {
           height: 3px; background: rgba(10,102,194,.12); border-radius: 999px; overflow: hidden;
         }
-        #inboxpro-capture-banner .inboxpro-cap-fill {
+        #relay-capture-banner .relay-cap-fill {
           height: 100%; background: #0A66C2; border-radius: 999px;
           transition: width 0.4s cubic-bezier(.25,1,.5,1); width: 0%;
         }
-        #inboxpro-capture-banner .inboxpro-cap-fill.done { background: #057642; }
+        #relay-capture-banner .relay-cap-fill.done { background: #057642; }
       `;
       document.head?.appendChild(style);
 
       const el = document.createElement('div');
-      el.id = 'inboxpro-capture-banner';
+      el.id = 'relay-capture-banner';
       el.innerHTML = `
-        <div class="inboxpro-cap-header">
-          <div class="inboxpro-cap-tile">IP</div>
+        <div class="relay-cap-header">
+          <div class="relay-cap-tile">IP</div>
           <div>
-            <div class="inboxpro-cap-title">Capturing profile</div>
-            <div class="inboxpro-cap-phase">This tab will close automatically · <span class="inboxpro-cap-time">0s</span></div>
+            <div class="relay-cap-title">Capturing profile</div>
+            <div class="relay-cap-phase">This tab will close automatically · <span class="relay-cap-time">0s</span></div>
           </div>
         </div>
-        <div class="inboxpro-cap-bar"><div class="inboxpro-cap-fill"></div></div>
+        <div class="relay-cap-bar"><div class="relay-cap-fill"></div></div>
       `;
       document.documentElement.appendChild(el);
       banner = el;
@@ -83,8 +83,8 @@
         if (!banner) return;
         const elapsedS = (Date.now() - startedAt) / 1000;
         const pct = Math.min(100, (elapsedS / CAPTURE_BUDGET_S) * 100);
-        const fill = banner.querySelector('.inboxpro-cap-fill');
-        const time = banner.querySelector('.inboxpro-cap-time');
+        const fill = banner.querySelector('.relay-cap-fill');
+        const time = banner.querySelector('.relay-cap-time');
         if (fill && !fill.classList.contains('done')) fill.style.width = `${pct}%`;
         if (time) time.textContent = `${Math.floor(elapsedS)}s`;
       }, 250);
@@ -701,14 +701,14 @@
         (data.recentPosts?.length ?? 0) > 0 ? `${data.recentPosts.length} post${data.recentPosts.length === 1 ? '' : 's'}` : null,
       ].filter(Boolean).join(' · ') || 'basic info';
       banner.innerHTML = `
-        <div class="inboxpro-cap-header">
-          <div class="inboxpro-cap-tile done">✓</div>
+        <div class="relay-cap-header">
+          <div class="relay-cap-tile done">✓</div>
           <div>
-            <div class="inboxpro-cap-title">Imported to InboxPro</div>
-            <div class="inboxpro-cap-phase">${fields} · closing tab</div>
+            <div class="relay-cap-title">Imported to Relay</div>
+            <div class="relay-cap-phase">${fields} · closing tab</div>
           </div>
         </div>
-        <div class="inboxpro-cap-bar"><div class="inboxpro-cap-fill done" style="width:100%"></div></div>
+        <div class="relay-cap-bar"><div class="relay-cap-fill done" style="width:100%"></div></div>
       `;
     }
 
@@ -795,7 +795,7 @@
 
   // Active-capture flow: banner + retries + DOM observer. Triggered either
   // by an app-initiated tab on load, or by the user clicking the floating
-  // "Import to InboxPro" button on a natural visit.
+  // "Import to Relay" button on a natural visit.
   function startCapture({ silent = false } = {}) {
     if (sent) return;
     startedAt = Date.now();
@@ -833,18 +833,18 @@
     observer.observe(document.documentElement, { childList: true, subtree: true });
   }
 
-  // Floating "Import to InboxPro" pill — LinkedIn-native styling. Looks
+  // Floating "Import to Relay" pill — LinkedIn-native styling. Looks
   // like a LinkedIn primary action button: filled LinkedIn blue, pill
   // shape, weight 600, native shadow. IP avatar tile preserves brand identity.
   function showFloatingButton() {
     try {
-      if (document.getElementById('inboxpro-floating-btn')) return;
-      if (!document.getElementById('inboxpro-floating-btn-style')) {
+      if (document.getElementById('relay-floating-btn')) return;
+      if (!document.getElementById('relay-floating-btn-style')) {
         const style = document.createElement('style');
-        style.id = 'inboxpro-floating-btn-style';
+        style.id = 'relay-floating-btn-style';
         style.textContent = `
-          @keyframes inboxpro-fb-in { from { opacity:0; transform: translateY(-50%) translateX(-8px); } to { opacity:1; transform: translateY(-50%) translateX(0); } }
-          #inboxpro-floating-btn {
+          @keyframes relay-fb-in { from { opacity:0; transform: translateY(-50%) translateX(-8px); } to { opacity:1; transform: translateY(-50%) translateX(0); } }
+          #relay-floating-btn {
             position: fixed; left: 16px; top: 50%; transform: translateY(-50%);
             z-index: 2147483647;
             background: #0A66C2; color: #FFFFFF;
@@ -855,19 +855,19 @@
             font-size: 14px; font-weight: 600;
             cursor: pointer;
             display: inline-flex; align-items: center; gap: 10px;
-            animation: inboxpro-fb-in 220ms cubic-bezier(.25,1,.5,1);
+            animation: relay-fb-in 220ms cubic-bezier(.25,1,.5,1);
             transition: background 120ms cubic-bezier(.25,1,.5,1), box-shadow 120ms, transform 120ms;
             -webkit-font-smoothing: antialiased;
           }
-          #inboxpro-floating-btn:hover {
+          #relay-floating-btn:hover {
             background: #004182;
             box-shadow: 0 0 0 1px rgba(0,0,0,.04), 0 6px 16px rgba(10,102,194,.40);
             transform: translateY(-50%) scale(1.02);
           }
-          #inboxpro-floating-btn:active {
+          #relay-floating-btn:active {
             transform: translateY(-50%) scale(.98);
           }
-          #inboxpro-floating-btn .inboxpro-fb-tile {
+          #relay-floating-btn .relay-fb-tile {
             width: 28px; height: 28px; border-radius: 50%;
             background: #FFFFFF; color: #0A66C2;
             display: flex; align-items: center; justify-content: center;
@@ -879,11 +879,11 @@
       }
 
       const btn = document.createElement('button');
-      btn.id = 'inboxpro-floating-btn';
+      btn.id = 'relay-floating-btn';
       btn.type = 'button';
       btn.innerHTML = `
-        <span class="inboxpro-fb-tile">IP</span>
-        <span>Import to InboxPro</span>
+        <span class="relay-fb-tile">IP</span>
+        <span>Import to Relay</span>
       `;
       btn.addEventListener('click', () => {
         try { btn.remove(); } catch {}
@@ -894,17 +894,17 @@
   }
 
   // Tiny bottom-right toast for silent refreshes — confirms to the user
-  // that InboxPro just updated their data without the more visible banner.
+  // that Relay just updated their data without the more visible banner.
   // Auto-dismisses; can stack if user navigates between profiles quickly.
   function showSilentToast(data) {
     try {
-      if (!document.getElementById('inboxpro-silent-toast-style')) {
+      if (!document.getElementById('relay-silent-toast-style')) {
         const style = document.createElement('style');
-        style.id = 'inboxpro-silent-toast-style';
+        style.id = 'relay-silent-toast-style';
         style.textContent = `
-          @keyframes inboxpro-toast-in { from { opacity:0; transform: translateY(8px); } to { opacity:1; transform: translateY(0); } }
-          @keyframes inboxpro-toast-out { to { opacity:0; transform: translateY(8px); } }
-          .inboxpro-silent-toast {
+          @keyframes relay-toast-in { from { opacity:0; transform: translateY(8px); } to { opacity:1; transform: translateY(0); } }
+          @keyframes relay-toast-out { to { opacity:0; transform: translateY(8px); } }
+          .relay-silent-toast {
             position: fixed; bottom: 24px; right: 24px; z-index: 2147483647;
             background: #FFFFFF; color: rgba(0,0,0,.9);
             border-radius: 8px;
@@ -913,13 +913,13 @@
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', system-ui, sans-serif;
             font-size: 13px; font-weight: 500;
             display: inline-flex; align-items: center; gap: 10px;
-            animation: inboxpro-toast-in 200ms cubic-bezier(.25,1,.5,1);
+            animation: relay-toast-in 200ms cubic-bezier(.25,1,.5,1);
           }
-          .inboxpro-silent-toast.leaving { animation: inboxpro-toast-out 240ms cubic-bezier(.55,0,.65,.2) forwards; }
+          .relay-silent-toast.leaving { animation: relay-toast-out 240ms cubic-bezier(.55,0,.65,.2) forwards; }
           @media (prefers-color-scheme: dark) {
-            .inboxpro-silent-toast { background: #1B1F23; color: rgba(255,255,255,.9); box-shadow: 0 0 0 1px rgba(255,255,255,.1), 0 4px 12px rgba(0,0,0,.5); }
+            .relay-silent-toast { background: #1B1F23; color: rgba(255,255,255,.9); box-shadow: 0 0 0 1px rgba(255,255,255,.1), 0 4px 12px rgba(0,0,0,.5); }
           }
-          .inboxpro-silent-toast .inboxpro-toast-dot {
+          .relay-silent-toast .relay-toast-dot {
             width: 16px; height: 16px; border-radius: 50%;
             background: #057642; color: #FFFFFF;
             display: flex; align-items: center; justify-content: center;
@@ -929,15 +929,15 @@
         document.head?.appendChild(style);
       }
       const toast = document.createElement('div');
-      toast.className = 'inboxpro-silent-toast';
+      toast.className = 'relay-silent-toast';
       const fieldList = [
         data?.about ? 'About' : null,
         (data?.prevRoles?.length ?? 0) > 0 ? `${data.prevRoles.length} role${data.prevRoles.length === 1 ? '' : 's'}` : null,
         (data?.recentPosts?.length ?? 0) > 0 ? `${data.recentPosts.length} post${data.recentPosts.length === 1 ? '' : 's'}` : null,
       ].filter(Boolean).join(' · ');
       toast.innerHTML = `
-        <span class="inboxpro-toast-dot">✓</span>
-        <span>Refreshed by InboxPro${fieldList ? ` · <span style="opacity:.6">${fieldList}</span>` : ''}</span>
+        <span class="relay-toast-dot">✓</span>
+        <span>Refreshed by Relay${fieldList ? ` · <span style="opacity:.6">${fieldList}</span>` : ''}</span>
       `;
       document.documentElement.appendChild(toast);
       setTimeout(() => { toast.classList.add('leaving'); }, 2500);
@@ -963,12 +963,12 @@
 
   function setupUserDrivenBanner() {
     try {
-      if (!document.getElementById('inboxpro-ud-style')) {
+      if (!document.getElementById('relay-ud-style')) {
         const style = document.createElement('style');
-        style.id = 'inboxpro-ud-style';
+        style.id = 'relay-ud-style';
         style.textContent = `
-          @keyframes inboxpro-ud-in { from { opacity:0; transform: translateY(-8px); } to { opacity:1; transform: translateY(0); } }
-          #inboxpro-ud-banner {
+          @keyframes relay-ud-in { from { opacity:0; transform: translateY(-8px); } to { opacity:1; transform: translateY(0); } }
+          #relay-ud-banner {
             position: fixed; top: 12px; right: 12px; z-index: 2147483647;
             min-width: 300px; max-width: 360px;
             background: #FFFFFF; color: rgba(0,0,0,.9);
@@ -977,87 +977,87 @@
             padding: 14px 16px;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', system-ui, sans-serif;
             font-size: 13px; line-height: 1.4;
-            animation: inboxpro-ud-in 240ms cubic-bezier(.25,1,.5,1);
+            animation: relay-ud-in 240ms cubic-bezier(.25,1,.5,1);
             -webkit-font-smoothing: antialiased;
           }
           @media (prefers-color-scheme: dark) {
-            #inboxpro-ud-banner { background: #1B1F23; color: rgba(255,255,255,.92); box-shadow: 0 0 0 1px rgba(255,255,255,.1), 0 12px 36px rgba(0,0,0,.6); }
-            #inboxpro-ud-banner .inboxpro-ud-sub { color: rgba(255,255,255,.55) !important; }
-            #inboxpro-ud-banner .inboxpro-ud-check.pending { color: rgba(255,255,255,.4) !important; }
-            #inboxpro-ud-banner button.inboxpro-ud-done { background: rgba(255,255,255,.08); color: rgba(255,255,255,.92); }
-            #inboxpro-ud-banner button.inboxpro-ud-done:hover { background: rgba(255,255,255,.14); }
+            #relay-ud-banner { background: #1B1F23; color: rgba(255,255,255,.92); box-shadow: 0 0 0 1px rgba(255,255,255,.1), 0 12px 36px rgba(0,0,0,.6); }
+            #relay-ud-banner .relay-ud-sub { color: rgba(255,255,255,.55) !important; }
+            #relay-ud-banner .relay-ud-check.pending { color: rgba(255,255,255,.4) !important; }
+            #relay-ud-banner button.relay-ud-done { background: rgba(255,255,255,.08); color: rgba(255,255,255,.92); }
+            #relay-ud-banner button.relay-ud-done:hover { background: rgba(255,255,255,.14); }
           }
-          #inboxpro-ud-banner .inboxpro-ud-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
-          #inboxpro-ud-banner .inboxpro-ud-tile {
+          #relay-ud-banner .relay-ud-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+          #relay-ud-banner .relay-ud-tile {
             width: 28px; height: 28px; border-radius: 50%;
             background: #0A66C2; color: #FFFFFF;
             display: inline-flex; align-items: center; justify-content: center;
             font-weight: 700; font-size: 11px; letter-spacing: 0.3px; flex-shrink: 0;
           }
-          #inboxpro-ud-banner .inboxpro-ud-title { font-weight: 600; font-size: 13px; }
-          #inboxpro-ud-banner .inboxpro-ud-sub { font-size: 11.5px; color: rgba(0,0,0,.55); margin-top: 1px; }
-          #inboxpro-ud-banner .inboxpro-ud-list {
+          #relay-ud-banner .relay-ud-title { font-weight: 600; font-size: 13px; }
+          #relay-ud-banner .relay-ud-sub { font-size: 11.5px; color: rgba(0,0,0,.55); margin-top: 1px; }
+          #relay-ud-banner .relay-ud-list {
             display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; margin: 8px 0 10px;
           }
-          #inboxpro-ud-banner .inboxpro-ud-check {
+          #relay-ud-banner .relay-ud-check {
             font-size: 12px; display: inline-flex; align-items: center; gap: 6px;
             transition: color 180ms ease, transform 240ms cubic-bezier(.25,1,.5,1);
           }
-          #inboxpro-ud-banner .inboxpro-ud-check.done { color: #057642; font-weight: 500; }
-          #inboxpro-ud-banner .inboxpro-ud-check.pending { color: rgba(0,0,0,.45); }
-          #inboxpro-ud-banner .inboxpro-ud-mark { font-weight: 700; font-size: 13px; width: 14px; display: inline-block; text-align: center; }
-          #inboxpro-ud-banner .inboxpro-ud-bar {
+          #relay-ud-banner .relay-ud-check.done { color: #057642; font-weight: 500; }
+          #relay-ud-banner .relay-ud-check.pending { color: rgba(0,0,0,.45); }
+          #relay-ud-banner .relay-ud-mark { font-weight: 700; font-size: 13px; width: 14px; display: inline-block; text-align: center; }
+          #relay-ud-banner .relay-ud-bar {
             height: 4px; background: rgba(10,102,194,.12); border-radius: 999px; overflow: hidden;
             margin-bottom: 8px;
           }
-          #inboxpro-ud-banner .inboxpro-ud-fill {
+          #relay-ud-banner .relay-ud-fill {
             height: 100%; background: #0A66C2; border-radius: 999px;
             transition: width 240ms cubic-bezier(.25,1,.5,1); width: 0%;
           }
-          #inboxpro-ud-banner .inboxpro-ud-fill.done { background: #057642; }
-          #inboxpro-ud-banner .inboxpro-ud-foot {
+          #relay-ud-banner .relay-ud-fill.done { background: #057642; }
+          #relay-ud-banner .relay-ud-foot {
             display: flex; align-items: center; justify-content: space-between; gap: 8px;
             font-size: 11.5px;
           }
-          #inboxpro-ud-banner .inboxpro-ud-hint { color: rgba(0,0,0,.55); }
-          #inboxpro-ud-banner button.inboxpro-ud-done {
+          #relay-ud-banner .relay-ud-hint { color: rgba(0,0,0,.55); }
+          #relay-ud-banner button.relay-ud-done {
             background: rgba(0,0,0,.06); border: 0; border-radius: 6px;
             font-family: inherit; font-size: 11.5px; font-weight: 600;
             color: rgba(0,0,0,.85); cursor: pointer;
             padding: 5px 10px;
             transition: background 140ms ease;
           }
-          #inboxpro-ud-banner button.inboxpro-ud-done:hover { background: rgba(0,0,0,.1); }
-          #inboxpro-ud-banner.finishing .inboxpro-ud-tile { background: #057642; }
-          #inboxpro-ud-banner.finishing .inboxpro-ud-bar { background: rgba(5,118,66,.15); }
+          #relay-ud-banner button.relay-ud-done:hover { background: rgba(0,0,0,.1); }
+          #relay-ud-banner.finishing .relay-ud-tile { background: #057642; }
+          #relay-ud-banner.finishing .relay-ud-bar { background: rgba(5,118,66,.15); }
         `;
         document.head?.appendChild(style);
       }
       const el = document.createElement('div');
-      el.id = 'inboxpro-ud-banner';
+      el.id = 'relay-ud-banner';
       el.innerHTML = `
-        <div class="inboxpro-ud-row">
-          <div class="inboxpro-ud-tile">IP</div>
+        <div class="relay-ud-row">
+          <div class="relay-ud-tile">IP</div>
           <div style="flex:1; min-width:0;">
-            <div class="inboxpro-ud-title">Capturing this profile</div>
-            <div class="inboxpro-ud-sub inboxpro-ud-status">Scroll down — we'll catch the rest as it loads</div>
+            <div class="relay-ud-title">Capturing this profile</div>
+            <div class="relay-ud-sub relay-ud-status">Scroll down — we'll catch the rest as it loads</div>
           </div>
         </div>
-        <div class="inboxpro-ud-list">
-          <span class="inboxpro-ud-check pending" data-key="about"><span class="inboxpro-ud-mark">·</span>About</span>
-          <span class="inboxpro-ud-check pending" data-key="experience"><span class="inboxpro-ud-mark">·</span>Experience</span>
-          <span class="inboxpro-ud-check pending" data-key="education"><span class="inboxpro-ud-mark">·</span>Education</span>
-          <span class="inboxpro-ud-check pending" data-key="posts"><span class="inboxpro-ud-mark">·</span>Posts (0)</span>
+        <div class="relay-ud-list">
+          <span class="relay-ud-check pending" data-key="about"><span class="relay-ud-mark">·</span>About</span>
+          <span class="relay-ud-check pending" data-key="experience"><span class="relay-ud-mark">·</span>Experience</span>
+          <span class="relay-ud-check pending" data-key="education"><span class="relay-ud-mark">·</span>Education</span>
+          <span class="relay-ud-check pending" data-key="posts"><span class="relay-ud-mark">·</span>Posts (0)</span>
         </div>
-        <div class="inboxpro-ud-bar"><div class="inboxpro-ud-fill"></div></div>
-        <div class="inboxpro-ud-foot">
-          <span class="inboxpro-ud-hint">Tab closes when we have everything</span>
-          <button class="inboxpro-ud-done" type="button">Done</button>
+        <div class="relay-ud-bar"><div class="relay-ud-fill"></div></div>
+        <div class="relay-ud-foot">
+          <span class="relay-ud-hint">Tab closes when we have everything</span>
+          <button class="relay-ud-done" type="button">Done</button>
         </div>
       `;
       document.documentElement.appendChild(el);
       udBanner = el;
-      el.querySelector('button.inboxpro-ud-done')?.addEventListener('click', () => {
+      el.querySelector('button.relay-ud-done')?.addEventListener('click', () => {
         startCountdown(true);
       });
     } catch {}
@@ -1066,29 +1066,29 @@
   function updateBannerChecklist() {
     if (!udBanner) return;
     const flag = (key, on) => {
-      const node = udBanner.querySelector(`.inboxpro-ud-check[data-key="${key}"]`);
+      const node = udBanner.querySelector(`.relay-ud-check[data-key="${key}"]`);
       if (!node) return;
       node.classList.toggle('done', !!on);
       node.classList.toggle('pending', !on);
-      const mark = node.querySelector('.inboxpro-ud-mark');
+      const mark = node.querySelector('.relay-ud-mark');
       if (mark) mark.textContent = on ? '✓' : '·';
     };
     flag('about', udCaptured.about);
     flag('experience', udCaptured.experience);
     flag('education', udCaptured.education);
-    const postsNode = udBanner.querySelector('.inboxpro-ud-check[data-key="posts"]');
+    const postsNode = udBanner.querySelector('.relay-ud-check[data-key="posts"]');
     if (postsNode) {
       const on = udCaptured.posts > 0;
       postsNode.classList.toggle('done', on);
       postsNode.classList.toggle('pending', !on);
-      const mark = postsNode.querySelector('.inboxpro-ud-mark');
+      const mark = postsNode.querySelector('.relay-ud-mark');
       if (mark) mark.textContent = on ? '✓' : '·';
       postsNode.lastChild.textContent = `Posts (${udCaptured.posts})`;
     }
     const total = 4;
     const done = (udCaptured.about ? 1 : 0) + (udCaptured.experience ? 1 : 0) + (udCaptured.education ? 1 : 0) + (udCaptured.posts > 0 ? 1 : 0);
     const pct = Math.round((done / total) * 100);
-    const fill = udBanner.querySelector('.inboxpro-ud-fill');
+    const fill = udBanner.querySelector('.relay-ud-fill');
     if (fill) fill.style.width = `${pct}%`;
   }
 
@@ -1126,10 +1126,10 @@
     udCountdownRemaining = 5;
     if (udBanner) {
       udBanner.classList.add('finishing');
-      const status = udBanner.querySelector('.inboxpro-ud-status');
-      const hint = udBanner.querySelector('.inboxpro-ud-hint');
-      const btn = udBanner.querySelector('button.inboxpro-ud-done');
-      if (status) status.textContent = userClicked ? 'Locking in what we have…' : 'Got it — sending you back to InboxPro';
+      const status = udBanner.querySelector('.relay-ud-status');
+      const hint = udBanner.querySelector('.relay-ud-hint');
+      const btn = udBanner.querySelector('button.relay-ud-done');
+      if (status) status.textContent = userClicked ? 'Locking in what we have…' : 'Got it — sending you back to Relay';
       if (hint) hint.textContent = '';
       if (btn) {
         btn.textContent = `Closing in ${udCountdownRemaining}s`;
@@ -1141,7 +1141,7 @@
     udCountdownTimer = setInterval(() => {
       udCountdownRemaining--;
       if (udBanner) {
-        const btn = udBanner.querySelector('button.inboxpro-ud-done');
+        const btn = udBanner.querySelector('button.relay-ud-done');
         if (btn) btn.textContent = `Closing in ${udCountdownRemaining}s`;
       }
       if (udCountdownRemaining <= 0) {
@@ -1230,7 +1230,7 @@
     sent = false;
     if (observer) { try { observer.disconnect(); } catch {} observer = null; }
     removeBanner();
-    try { document.getElementById('inboxpro-floating-btn')?.remove(); } catch {}
+    try { document.getElementById('relay-floating-btn')?.remove(); } catch {}
   }
 
   let lastPath = location.pathname;

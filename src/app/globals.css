@@ -87,10 +87,16 @@
   --radius-card: 16px;
   --radius-row: 10px;
   --radius-pill: 999px;
+
+  /* Wordmark / mark PNGs ship white-on-transparent so they look right in
+     dark mode. In light mode, invert them so the runner reads as dark
+     against the light card. */
+  --logo-filter: invert(1);
 }
 
 /* ── DARK ── */
 [data-theme="dark"] {
+  --logo-filter: none;
   --color-bg: #0A0A0A;
   --color-card: #161616;
   --color-card-hover: #1E1E1E;
@@ -146,6 +152,20 @@ html, body {
 }
 
 * { box-sizing: border-box; }
+
+/* Draggable strip across the top of the Electron window. Electron uses
+   `titleBarStyle: 'hiddenInset'` for the traffic-light controls but
+   leaves the rest of the window non-draggable until we mark a region.
+   The strip is a real layout element above the app content — body is
+   flex-col so the strip takes 28px and the app fills the rest. */
+.electron-titlebar {
+  height: 28px;
+  flex-shrink: 0;
+  -webkit-app-region: drag;
+}
+button, a, input, textarea, select, [role="button"], [contenteditable="true"] {
+  -webkit-app-region: no-drag;
+}
 
 ::selection {
   background: var(--color-accent-soft);

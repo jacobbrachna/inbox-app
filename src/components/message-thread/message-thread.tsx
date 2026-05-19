@@ -560,7 +560,7 @@ export function MessageThread() {
     if (activeConversationId.startsWith('draft:')) return;
     lastTypingAtRef.current = now;
     window.postMessage(
-      { type: 'inboxpro-typing', conversationUrn: activeConversationId },
+      { type: 'relay-typing', conversationUrn: activeConversationId },
       '*',
     );
   }
@@ -802,7 +802,7 @@ export function MessageThread() {
   async function handleSend() {
     if (!replyText.trim() || !activeConversationId) return;
     if (!isExtensionReady()) {
-      setSendError('InboxPro extension not detected. Reload extension and refresh.');
+      setSendError('Relay extension not detected. Reload extension and refresh.');
       return;
     }
 
@@ -821,7 +821,7 @@ export function MessageThread() {
       const requestId = `new-thread-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const onResult = (ev: MessageEvent) => {
         if (ev.source !== window || !ev.data) return;
-        if (ev.data.type !== 'inboxpro-new-thread-result' || ev.data.requestId !== requestId) return;
+        if (ev.data.type !== 'relay-new-thread-result' || ev.data.requestId !== requestId) return;
         window.removeEventListener('message', onResult);
         const r = ev.data.response;
         if (r?.ok) {
@@ -841,12 +841,12 @@ export function MessageThread() {
       };
       window.addEventListener('message', onResult);
       window.postMessage({
-        type: 'inboxpro-new-thread-request',
+        type: 'relay-new-thread-request',
         requestId,
         channel: draftChannel,
         recipientUrn: primary.id,
         recipientName: primary.name,
-        // Subject intentionally omitted — InboxPro targets messaging
+        // Subject intentionally omitted — Relay targets messaging
         // existing connections, where LinkedIn doesn't require one.
         subject: null,
         body,
@@ -885,7 +885,7 @@ export function MessageThread() {
     const requestId = `send-${Date.now()}-${Math.random()}`;
     const onResult = (ev: MessageEvent) => {
       if (ev.source !== window || !ev.data) return;
-      if (ev.data.type !== 'inboxpro-send-result' || ev.data.requestId !== requestId) return;
+      if (ev.data.type !== 'relay-send-result' || ev.data.requestId !== requestId) return;
       window.removeEventListener('message', onResult);
       const r = ev.data.response;
       setSending(false);
@@ -897,12 +897,12 @@ export function MessageThread() {
         setTimeout(() => setSentFlash(false), 1200);
       } else {
         setSendError(r?.reason || 'Send failed. The message is still in your thread but did not reach LinkedIn.');
-        console.error('[InboxPro send] full response:', r);
+        console.error('[Relay send] full response:', r);
       }
     };
     window.addEventListener('message', onResult);
     window.postMessage({
-      type: 'inboxpro-send-message',
+      type: 'relay-send-message',
       conversationUrn: convId,
       body: text,
       requestId,
@@ -1195,7 +1195,7 @@ export function MessageThread() {
           >
             <h3 className="text-[16px] font-semibold text-[var(--color-text-primary)] mb-2">Delete conversation?</h3>
             <p className="text-[13px] text-[var(--color-text-secondary)] mb-4">
-              Removes this conversation from InboxPro <strong className="text-[var(--color-danger)]">and from LinkedIn</strong>. This is permanent.
+              Removes this conversation from Relay <strong className="text-[var(--color-danger)]">and from LinkedIn</strong>. This is permanent.
             </p>
             <p className="text-[11px] text-[var(--color-text-tertiary)] mb-5">
               To keep the conversation on LinkedIn and only remove it locally, turn off &ldquo;Two-way sync&rdquo; in Settings first.
@@ -1479,7 +1479,7 @@ export function MessageThread() {
           )}
 
           {/* Draft-mode channel picker — slim row above the textarea. No
-              subject field: InboxPro targets messaging existing connections,
+              subject field: Relay targets messaging existing connections,
               where LinkedIn doesn't require one and SN treats it as a
               regular DM under the hood. */}
           {isDraft && (

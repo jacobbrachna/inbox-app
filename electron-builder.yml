@@ -1,0 +1,82 @@
+appId: com.jacobbrachna.relay
+productName: Relay
+copyright: Copyright © 2026 Jacob Brachna
+
+directories:
+  output: dist-electron
+  buildResources: build
+
+# Inside app.asar. node_modules is included automatically by electron-
+# builder from package.json's prod dependencies; we explicitly exclude
+# the heavy front-end packages that already got bundled into out/ by
+# Next.js's static export — they aren't needed at runtime by the
+# Electron main process.
+files:
+  - "electron/**/*"
+  - "package.json"
+  - "!node_modules/next/**/*"
+  - "!node_modules/@next/**/*"
+  - "!node_modules/react/**/*"
+  - "!node_modules/react-dom/**/*"
+  - "!node_modules/@radix-ui/**/*"
+  - "!node_modules/lucide-react/**/*"
+  - "!node_modules/tailwindcss/**/*"
+  - "!node_modules/tailwind-merge/**/*"
+  - "!node_modules/zustand/**/*"
+  - "!node_modules/swr/**/*"
+  - "!node_modules/axios/**/*"
+  - "!node_modules/date-fns/**/*"
+  - "!node_modules/clsx/**/*"
+
+# Static export + seed DB ride alongside the .app at Contents/Resources/.
+extraResources:
+  - from: "out"
+    to: "out"
+  - from: "prisma/dev.db.seed"
+    to: "dev.db.seed"
+
+extraMetadata:
+  main: electron/main.js
+
+# Native modules can't live inside app.asar (dlopen of a packed file
+# fails). Prisma 7's generated client at .prisma/ also stays unpacked
+# so its WASM file is real on disk.
+asarUnpack:
+  - "node_modules/better-sqlite3/**/*"
+  - "node_modules/.prisma/**/*"
+  - "node_modules/@prisma/**/*"
+
+buildDependenciesFromSource: false
+npmRebuild: true
+
+mac:
+  category: public.app-category.productivity
+  target:
+    - dmg
+    - zip
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  notarize: false
+
+dmg:
+  title: "Relay ${version}"
+  contents:
+    - x: 180
+      y: 170
+      type: file
+    - x: 480
+      y: 170
+      type: link
+      path: /Applications
+  window:
+    width: 660
+    height: 400
+
+publish:
+  provider: github
+  owner: jacobbrachna
+  repo: inbox-app
+
+afterPack: build/copy-prisma.js
+afterSign: build/notarize.js

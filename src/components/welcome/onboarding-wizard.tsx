@@ -171,7 +171,7 @@ export function OnboardingWizard({ preview = false, onComplete }: OnboardingWiza
                 className="inline-flex items-center gap-1.5 px-4 py-1.5 text-[12.5px] font-semibold rounded-lg bg-[var(--color-accent-deep)] hover:bg-[var(--color-accent)] text-white active:scale-[0.97]"
                 style={{ transition: 'background-color 140ms var(--ease-out-quart), transform 80ms var(--ease-out-quart)' }}
               >
-                Open InboxPro <ArrowRight className="w-3.5 h-3.5" />
+                Open Relay <ArrowRight className="w-3.5 h-3.5" />
               </button>
             )}
           </div>
@@ -184,7 +184,7 @@ export function OnboardingWizard({ preview = false, onComplete }: OnboardingWiza
 // ─── Steps ────────────────────────────────────────────────────────────────
 
 // Absolute path where both dev users (npm run dev) and .app users (the
-// GetInboxPro launcher script clones into the same place) end up with
+// GetRelay launcher script clones into the same place) end up with
 // the extension folder. Shown to the user with a copy button.
 const EXTENSION_PATH = '~/Documents/inbox-app/extension';
 
@@ -211,7 +211,7 @@ function ExtensionStep({ ready, onContinue }: { ready: boolean; onContinue: () =
         Connect the Chrome extension
       </h2>
       <p className="text-[13px] text-[var(--color-text-secondary)] mt-2 leading-relaxed">
-        InboxPro reads your LinkedIn and Sales Navigator inboxes through a small
+        Relay reads your LinkedIn and Sales Navigator inboxes through a small
         Chrome extension. It runs locally — your data stays on your machine.
       </p>
 
@@ -302,11 +302,11 @@ function SignInStep({ extensionReady }: { extensionReady: boolean }) {
   useEffect(() => {
     function onMessage(ev: MessageEvent) {
       if (ev.source !== window || !ev.data) return;
-      if (ev.data.type === 'inboxpro-refresh-progress' && typeof ev.data.message === 'string') {
+      if (ev.data.type === 'relay-refresh-progress' && typeof ev.data.message === 'string') {
         setProgress(ev.data.message);
         setSyncError(null);
       }
-      if (ev.data.type === 'inboxpro-full-sync-result') {
+      if (ev.data.type === 'relay-full-sync-result') {
         const r = ev.data.response;
         if (r?.ok) {
           setSyncDone({ count: r.count ?? 0, messageCount: r.messageCount ?? 0 });
@@ -330,7 +330,7 @@ function SignInStep({ extensionReady }: { extensionReady: boolean }) {
     setStarting(true);
     setSyncError(null);
     setProgress('Starting…');
-    window.postMessage({ type: 'inboxpro-full-sync-request' }, '*');
+    window.postMessage({ type: 'relay-full-sync-request' }, '*');
   }
 
   const syncing = starting || progress !== null;
@@ -465,17 +465,22 @@ function ImportStep() {
     setUploading(true);
     setStatus(null);
     try {
-      const fd = new FormData();
-      fd.append('file', file);
+      // Endpoint expects JSON { csv: string }, not multipart. Reading the
+      // file as text on the client matches the linkedin-import.tsx pattern.
+      const csv = await file.text();
       const r = await fetch('/api/import/linkedin-connections', {
         method: 'POST',
-        body: fd,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ csv }),
         signal: ac.signal,
       });
       const d = await r.json();
       if (ac.signal.aborted) return;
       if (r.ok) {
-        setStatus({ ok: true, msg: `Matched ${d.matched ?? 0} of ${d.total ?? 0} contacts.` });
+        setStatus({
+          ok: true,
+          msg: `Matched ${d.contactsMatched ?? 0} of ${d.rowsParsed ?? 0} contacts.`,
+        });
       } else {
         setStatus({ ok: false, msg: d.error ?? 'Import failed' });
       }
@@ -699,7 +704,7 @@ function DoneStep({ onBackToSignIn }: { onBackToSignIn: () => void }) {
       {empty ? (
         <>
           <p className="text-[13px] text-[var(--color-text-secondary)] mt-2 leading-relaxed max-w-[400px] mx-auto">
-            Heads up — no conversations have synced yet. You can still open InboxPro
+            Heads up — no conversations have synced yet. You can still open Relay
             and sync from there, or go back and run sync now.
           </p>
           <button
@@ -713,7 +718,7 @@ function DoneStep({ onBackToSignIn }: { onBackToSignIn: () => void }) {
         <>
           <p className="text-[13px] text-[var(--color-text-secondary)] mt-2 leading-relaxed max-w-[400px] mx-auto">
             <strong className="text-[var(--color-text-primary)]">{count.toLocaleString()}</strong>{' '}
-            conversation{count === 1 ? '' : 's'} synced. InboxPro will keep your inbox up to date
+            conversation{count === 1 ? '' : 's'} synced. Relay will keep your inbox up to date
             automatically — keep a LinkedIn or Sales Nav tab open and new messages land in real time.
           </p>
         </>

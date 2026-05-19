@@ -5,9 +5,9 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 function injectScript() {
   return new Promise((resolve) => {
-    if (document.getElementById('inboxpro-injected')) return resolve();
+    if (document.getElementById('relay-injected')) return resolve();
     const s = document.createElement('script');
-    s.id = 'inboxpro-injected';
+    s.id = 'relay-injected';
     s.src = chrome.runtime.getURL('injected.js');
     s.onload = () => resolve();
     (document.head || document.documentElement).appendChild(s);
@@ -20,7 +20,7 @@ injectScript();
 
 // Kick off passive auto-sync as soon as the page is interactive. The interval
 // itself is harmless (it no-ops when there's nothing new) and self-recovers if
-// the InboxPro app isn't running yet.
+// the Relay app isn't running yet.
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => ensureAutoSyncStarted());
 } else {
@@ -39,7 +39,7 @@ let myProfileUrn = '';                  // resolved during sync
 // Re-evaluated on every SPA navigation between profiles. Three outcomes:
 //   • App-initiated tab → POST silently (full capture flow active)
 //   • Messageable contact (already has conversation) → POST silently
-//   • Stranger → SKIP POST (wait for "Import to InboxPro" button click)
+//   • Stranger → SKIP POST (wait for "Import to Relay" button click)
 //
 // LinkedIn's React app does SPA navigation between /in/<slug> pages via
 // pushState — content scripts don't re-execute, so we maintain a cache
@@ -252,7 +252,7 @@ function fireThreadRefresh(urn) {
   if (firedRecently.has(urn)) return;
   firedRecently.add(urn);
   setTimeout(() => firedRecently.delete(urn), 2000);
-  console.log('[InboxPro realtime] refreshThread:', urn.slice(-40));
+  console.log('[Relay realtime] refreshThread:', urn.slice(-40));
   chrome.runtime.sendMessage({ action: 'refreshThread', urn }).catch(() => {});
 }
 
@@ -261,7 +261,7 @@ function scheduleFullSync() {
   fullSyncScheduled = true;
   setTimeout(() => {
     fullSyncScheduled = false;
-    console.log('[InboxPro realtime] follow-up refreshNow');
+    console.log('[Relay realtime] follow-up refreshNow');
     chrome.runtime.sendMessage({ action: 'refreshNow' }).catch(() => {});
   }, 1500);
 }
@@ -314,7 +314,7 @@ window.addEventListener('message', (ev) => {
 
 // SN action observed (e.g. POST createMessage) — SN doesn't re-fetch its own
 // inbox after these, so we trigger an immediate snRefreshNow to mirror the
-// state into InboxPro within seconds rather than waiting for the next poll.
+// state into Relay within seconds rather than waiting for the next poll.
 window.addEventListener('message', (ev) => {
   if (!ev.data || !ev.data.__inboxproSnAction) return;
   fetch('http://localhost:3030/api/sync-log', {
@@ -548,7 +548,7 @@ window.addEventListener('message', (ev) => {
   // If we just harvested NEW profile entities with publicIdentifier, push
   // them to /api/import so the server can backfill participants' profileUrl.
   // This is the passive enrichment path — fires whenever LinkedIn's own UI
-  // touches a profile, without needing any user action in InboxPro.
+  // touches a profile, without needing any user action in Relay.
   let newProfileEntitiesWithSlug = 0;
   const profileEntitiesPayload = {};
   for (const [k, e] of entitiesByUrn) {
@@ -621,7 +621,7 @@ function countMessages() {
 
 // ── Realtime push: fetch-hook → /api/import ─────────────────────────────────
 // Whenever walkAndHarvest finds new convs or msgs in an intercepted LinkedIn
-// response, we accumulate them here and flush to InboxPro on a short debounce.
+// response, we accumulate them here and flush to Relay on a short debounce.
 // This is what makes the inbox feel realtime when a LinkedIn tab is open.
 const pendingNewConvCategoryByUrn = new Map();   // convUrn → category (or '' if unknown)
 const pendingNewMsgsByConv = new Map();          // convUrn → Map<msgUrn, msg>
@@ -703,7 +703,7 @@ async function flushRealtimePush() {
         msgs: msgCount,
       }),
     }).catch(() => {});
-    // Tell the InboxPro tab(s) to re-render the affected threads. Content
+    // Tell the Relay tab(s) to re-render the affected threads. Content
     // scripts can't reach other tabs directly — route via the background.
     for (const convUrn of msgsByConv.keys()) {
       chrome.runtime.sendMessage({
@@ -1059,7 +1059,7 @@ async function runSync(onProgress) {
       messagesPayload[conv.entityUrn] = msgs;
     }
   }
-  console.log(`[InboxPro] Packed messages for ${Object.keys(messagesPayload).length}/${conversations.length} conversations`);
+  console.log(`[Relay] Packed messages for ${Object.keys(messagesPayload).length}/${conversations.length} conversations`);
 
   // Treat everything we just packed as "known in DB" for notification gating —
   // after a full sync, the app will have all these convs and we should
@@ -1133,11 +1133,11 @@ async function dumpSample() {
 
 // ── Passive auto-sync ──────────────────────────────────────────────────────────
 // Every AUTO_SYNC_INTERVAL_MS, if we've harvested anything new since the last
-// push, send ONLY the delta to the app. This keeps InboxPro fresh while the
+// push, send ONLY the delta to the app. This keeps Relay fresh while the
 // user is just browsing LinkedIn normally.
 
 function ensureAutoSyncStarted() {
-  // The 10-second poll in bridge.js (running on the InboxPro tab) is now the
+  // The 10-second poll in bridge.js (running on the Relay tab) is now the
   // canonical sync path. This function only loads "known conv URNs" once so
   // notifications fire correctly. The old 15s push-only-deltas interval was
   // removed in favor of the bridge poll.

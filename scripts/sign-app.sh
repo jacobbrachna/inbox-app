@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sign + notarize InboxPro.app after Tauri builds it unsigned. Tauri's
+# Sign + notarize Relay.app after Tauri builds it unsigned. Tauri's
 # built-in --deep --force sign strips the secure timestamp from native
 # binaries inside Resources/ which Apple's notarytool rejects. So we
 # build unsigned, sign every binary individually bottom-up with the
@@ -13,7 +13,7 @@ set -e
 cd "$(dirname "$0")/.."
 
 IDENTITY="Developer ID Application: Jacob Brachna-Gonzalez (AP3VSH77V4)"
-APP="src-tauri/target/release/bundle/macos/InboxPro.app"
+APP="src-tauri/target/release/bundle/macos/Relay.app"
 ENTITLEMENTS="src-tauri/entitlements.plist"
 
 BLUE='\033[0;34m'; GREEN='\033[0;32m'; RED='\033[0;31m'; DIM='\033[2m'; NC='\033[0m'
@@ -72,7 +72,7 @@ codesign --verify --strict --verbose=1 "$APP" 2>&1 | head -3
 ok "Local signature valid"
 
 # ── Submit to notarytool ────────────────────────────────────────────────
-ZIP=/tmp/InboxPro-notarize.zip
+ZIP=/tmp/Relay-notarize.zip
 rm -f "$ZIP"
 step "Zipping for notarization…"
 ditto -c -k --keepParent "$APP" "$ZIP"
@@ -100,29 +100,29 @@ xcrun stapler validate "$APP" > /dev/null && ok "Staple verified"
 # ── Rebuild the DMG with the now-signed .app inside ─────────────────────
 # Tauri's DMG was built around the unsigned .app. Re-create it.
 step "Re-bundling DMG with signed .app…"
-DMG_OUT="src-tauri/target/release/bundle/dmg/InboxPro_$(node -p "require('./package.json').version")_aarch64.dmg"
+DMG_OUT="src-tauri/target/release/bundle/dmg/Relay_$(node -p "require('./package.json').version")_aarch64.dmg"
 rm -f "$DMG_OUT"
 # Use Tauri's bundle_dmg.sh helper if available, else fall back to hdiutil
 BUNDLE_DMG=src-tauri/target/release/bundle/dmg/bundle_dmg.sh
 if [ -f "$BUNDLE_DMG" ]; then
   (cd "$(dirname "$DMG_OUT")" && bash bundle_dmg.sh \
-    --volname InboxPro \
-    --icon InboxPro.app 180 170 \
+    --volname Relay \
+    --icon Relay.app 180 170 \
     --app-drop-link 480 170 \
     --window-size 660 400 \
-    --hide-extension InboxPro.app \
+    --hide-extension Relay.app \
     --volicon icon.icns \
-    "$(basename "$DMG_OUT")" "../macos/InboxPro.app" > /dev/null 2>&1) \
-    || hdiutil create -volname InboxPro -srcfolder "$APP" -ov -format UDZO "$DMG_OUT" > /dev/null
+    "$(basename "$DMG_OUT")" "../macos/Relay.app" > /dev/null 2>&1) \
+    || hdiutil create -volname Relay -srcfolder "$APP" -ov -format UDZO "$DMG_OUT" > /dev/null
 else
-  hdiutil create -volname InboxPro -srcfolder "$APP" -ov -format UDZO "$DMG_OUT" > /dev/null
+  hdiutil create -volname Relay -srcfolder "$APP" -ov -format UDZO "$DMG_OUT" > /dev/null
 fi
 codesign --sign "$IDENTITY" --timestamp --force "$DMG_OUT" > /dev/null
 ok "DMG re-created at $DMG_OUT"
 
 echo
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}  ✓ InboxPro.app signed + notarized + stapled${NC}"
+echo -e "${GREEN}  ✓ Relay.app signed + notarized + stapled${NC}"
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo
 echo "  App: $APP"

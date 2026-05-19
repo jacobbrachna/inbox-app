@@ -1,6 +1,6 @@
 // Passive link harvester. Runs on LinkedIn pages where /in/<slug>/ links are
 // visible (My Network home, Notifications). No buttons, no scrolling, no UI —
-// just snapshots whatever's already rendered and posts to InboxPro.
+// just snapshots whatever's already rendered and posts to Relay.
 //
 // Catches new connections naturally: you accept a request, LinkedIn renders
 // the notification with the person's profile link, we capture it.

@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Plus, Trash2, Check, X } from 'lucide-react';
 import { useStore, useAuthStore } from '@/store';
 import type { Snippet } from '@/types';
@@ -14,67 +14,29 @@ import { LinkedInImport } from './linkedin-import';
 
 
 function RecoverButton() {
-  const [state, setState] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
-  const [logLines, setLogLines] = useState<string[]>([]);
+  // Recover state + log live in the store so progress survives navigating
+  // away from Settings and back. Per-component UI state (bridge readiness
+  // check, watchdog) stays local.
+  const state = useStore((s) => s.recoverState);
+  const logLines = useStore((s) => s.recoverLog);
+  const startRecover = useStore((s) => s.startRecover);
   const bridgeReady = useExtensionReady();
 
-  function log(msg: string, level: 'info' | 'warn' | 'error' = 'info') {
-    const time = new Date().toLocaleTimeString();
-    const prefix = level === 'error' ? '✗ ' : level === 'warn' ? '⚠ ' : '· ';
-    setLogLines((lines) => [...lines.slice(-200), `[${time}] ${prefix}${msg}`]);
-  }
-
-  useEffect(() => {
-    function onMessage(ev: MessageEvent) {
-      if (ev.source !== window || !ev.data) return;
-      if (ev.data.type === 'inboxpro-refresh-progress') {
-        log(ev.data.message);
-      }
-      if (ev.data.type === 'inboxpro-recover-result') {
-        const r = ev.data.response;
-        if (r?.ok) {
-          setState('done');
-          log(`Done. Recovered ${r.recovered} of ${r.total} threads`, 'info');
-        } else {
-          setState('error');
-          log(`Failed: ${r?.reason ?? 'unknown'}`, 'error');
-        }
-      }
-    }
-    window.addEventListener('message', onMessage);
-    return () => window.removeEventListener('message', onMessage);
-  }, []);
-
   function start() {
-    setState('running');
-    setLogLines([]);
-    log('Starting recovery…');
-
+    startRecover();
+    // Extra context the store doesn't surface: the backend's own count of
+    // sparse convs (advisory, not used for control flow).
     fetch('/api/conversations/sparse')
       .then((r) => r.json())
       .then((d) => {
         const n = Array.isArray(d.ids) ? d.ids.length : 0;
-        log(`Backend reports ${n} conversations need recovery`);
+        // Append directly via the store's accessor so the line lands in the
+        // same log the component is reading.
+        useStore.setState((s) => ({
+          recoverLog: [...s.recoverLog, `[${new Date().toLocaleTimeString()}] Backend reports ${n} conversations need recovery`],
+        }));
       })
-      .catch((e) => log(`Backend check failed: ${e.message}`, 'error'));
-
-    // Watchdog: track if ANY extension message has arrived
-    let extensionResponded = false;
-    function onAny(ev: MessageEvent) {
-      if (ev.data?.type === 'inboxpro-refresh-progress' || ev.data?.type === 'inboxpro-recover-result') {
-        extensionResponded = true;
-      }
-    }
-    window.addEventListener('message', onAny);
-    setTimeout(() => {
-      window.removeEventListener('message', onAny);
-      if (!extensionResponded) {
-        log('No response from extension after 8s.', 'warn');
-        log('Try: chrome://extensions → reload InboxPro → hard-refresh this page.', 'warn');
-      }
-    }, 8000);
-
-    window.postMessage({ type: 'inboxpro-recover-request' }, '*');
+      .catch(() => {});
   }
 
   function copyLog() {
@@ -211,7 +173,7 @@ export function SettingsPanel() {
         <h3 className="eyebrow mb-3">Sync</h3>
         <div className="card p-5">
           <p className="text-sm text-[var(--color-text-tertiary)] mb-1">
-            InboxPro auto-syncs in the background every 5 minutes (and passively while you have LinkedIn open).
+            Relay auto-syncs in the background every 5 minutes (and passively while you have LinkedIn open).
           </p>
           <p className="text-xs text-[var(--color-text-tertiary)] mb-4">
             Use the refresh button in the inbox header for an on-demand pull. To rebuild from scratch, use the recovery tool below.
@@ -233,7 +195,7 @@ export function SettingsPanel() {
             <div>
               <p className="text-sm font-semibold text-[var(--color-text-primary)]">Two-way sync</p>
               <p className="text-xs text-[var(--color-text-tertiary)] mt-1 max-w-md">
-                When enabled, actions in InboxPro (delete, archive, star, mark read/unread) also fire on LinkedIn. Disable for local-only changes.
+                When enabled, actions in Relay (delete, archive, star, mark read/unread) also fire on LinkedIn. Disable for local-only changes.
               </p>
               {mirrorToLinkedIn && (
                 <p className="text-xs text-[var(--color-accent)] mt-2">

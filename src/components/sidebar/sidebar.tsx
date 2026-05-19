@@ -239,14 +239,20 @@ export function Sidebar() {
         )}
         style={{ transition: 'width 180ms var(--ease-out-quart), box-shadow 180ms var(--ease-out-quart)' }}
       >
-      {/* Wordmark */}
+      {/* Wordmark — runner mark in a tile, then "Relay" + tagline. */}
       <div className="px-4 pt-5 pb-3 flex items-center gap-2.5 max-lg:justify-center max-lg:group-hover/sidebar:justify-start max-lg:px-0 max-lg:group-hover/sidebar:px-4">
         <div className="w-9 h-9 rounded-[10px] bg-[var(--color-accent-soft)] flex items-center justify-center flex-shrink-0">
-          <span className="text-[15px] font-bold text-[var(--color-accent-fg)]">i</span>
+          <img
+            src="/relay-mark.png"
+            alt=""
+            aria-hidden
+            className="w-6 h-6 object-contain"
+            style={{ filter: 'var(--logo-filter, none)' }}
+          />
         </div>
         <div className="leading-tight flex-1 min-w-0 max-lg:hidden max-lg:group-hover/sidebar:block">
           <div className="text-[15px] font-semibold tracking-tight text-[var(--color-text-primary)] truncate">
-            InboxPro
+            Relay
           </div>
           <div className="text-[10px] text-[var(--color-text-tertiary)] mt-0.5">
             LinkedIn · Sales Nav

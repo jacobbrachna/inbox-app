@@ -194,9 +194,9 @@ function checkExtension() {
   }
   if (missing === 0) pass(`All extension files present`, `${files.length} files`);
 
-  // bridge.js: still injects #inboxpro-bridge-marker?
+  // bridge.js: still injects #relay-bridge-marker?
   const bridge = fs.readFileSync(path.join(dir, 'bridge.js'), 'utf8');
-  if (bridge.includes("marker.id = 'inboxpro-bridge-marker'")) pass('bridge.js still injects the marker');
+  if (bridge.includes("marker.id = 'relay-bridge-marker'")) pass('bridge.js still injects the marker');
   else fail('bridge.js marker injection missing — UI bridge gate will never flip');
 
   // manifest.json: bridge.js mapped to localhost?
@@ -229,7 +229,7 @@ async function checkRecentActivity() {
 
 // ─── Run ─────────────────────────────────────────────────────────────────
 async function main() {
-  console.log(`${BOLD}InboxPro health check${NC}  ${DIM}${BASE}${NC}\n`);
+  console.log(`${BOLD}Relay health check${NC}  ${DIM}${BASE}${NC}\n`);
   await checkServer();
   await checkRoutes();
   await checkAiKey();

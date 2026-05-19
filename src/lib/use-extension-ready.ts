@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 
-const MARKER_ID = 'inboxpro-bridge-marker';
+const MARKER_ID = 'relay-bridge-marker';
 
 // One MutationObserver per page lifecycle. Cheaper than every consumer
 // running a 1s setInterval poll. We attach to document.body once and
@@ -27,7 +27,7 @@ function ensureObserver() {
   // This fires synchronously after the marker is appended.
   window.addEventListener('message', (ev) => {
     if (ev.source !== window || !ev.data) return;
-    if (ev.data.type === 'inboxpro-bridge-ready') notify(true);
+    if (ev.data.type === 'relay-bridge-ready') notify(true);
   });
   // Fallback: watch <head> for the marker append (childList only — cheap).
   // Handles the case where the marker was injected before we mounted but
@@ -42,7 +42,7 @@ function ensureObserver() {
 }
 
 /**
- * Returns true once the InboxPro Chrome extension has injected its bridge
+ * Returns true once the Relay Chrome extension has injected its bridge
  * marker into the page. A single MutationObserver watches document.body —
  * every call site subscribes to the same source instead of polling.
  */

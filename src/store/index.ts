@@ -23,29 +23,29 @@ interface AuthStore {
 function fireMirror(kind: string, urn: string, value?: unknown) {
   try {
     if (!isExtensionReady()) {
-      console.warn('[InboxPro mirror] extension bridge not found — action not mirrored to LinkedIn:', kind);
+      console.warn('[Relay mirror] extension bridge not found — action not mirrored to LinkedIn:', kind);
       return;
     }
     const requestId = `mirror-${Date.now()}-${Math.random()}`;
     function onResult(ev: MessageEvent) {
       if (ev.source !== window || !ev.data) return;
-      if (ev.data.type !== 'inboxpro-mirror-result' || ev.data.requestId !== requestId) return;
+      if (ev.data.type !== 'relay-mirror-result' || ev.data.requestId !== requestId) return;
       window.removeEventListener('message', onResult);
       const r = ev.data.response;
       if (r?.ok) {
-        console.log(`[InboxPro mirror] ${kind} → LinkedIn OK`);
+        console.log(`[Relay mirror] ${kind} → LinkedIn OK`);
       } else {
-        console.error(`[InboxPro mirror] ${kind} failed:`, r);
+        console.error(`[Relay mirror] ${kind} failed:`, r);
       }
     }
     window.addEventListener('message', onResult);
     setTimeout(() => window.removeEventListener('message', onResult), 15_000);
     window.postMessage(
-      { type: 'inboxpro-mirror-request', kind, urn, value, requestId },
+      { type: 'relay-mirror-request', kind, urn, value, requestId },
       '*',
     );
   } catch (e) {
-    console.error('[InboxPro mirror] error:', e);
+    console.error('[Relay mirror] error:', e);
   }
 }
 
@@ -55,7 +55,7 @@ export const useAuthStore = create<AuthStore>()(
       auth: { liAtCookie: '', isAuthenticated: false },
       setAuth: (auth) => set((s) => ({ auth: { ...s.auth, ...auth } })),
       clearAuth: () => set({ auth: { liAtCookie: '', isAuthenticated: false } }),
-      // Default ON — actions in InboxPro should reflect back to LinkedIn by
+      // Default ON — actions in Relay should reflect back to LinkedIn by
       // default. Snooze is local-only (LinkedIn doesn't have snooze).
       mirrorToLinkedIn: true,
       setMirrorToLinkedIn: (v) => set({ mirrorToLinkedIn: v }),
@@ -167,6 +167,27 @@ interface AppState {
   // Bootstrap from server (DB)
   loadFromServer: () => Promise<void>;
   hasLoaded: boolean;
+
+  // Long-running AI classify run — lives in the store so progress survives
+  // navigating away from Diagnostics. Any component that wants to render
+  // progress just subscribes to these fields; the runner itself loops here.
+  classifyState: 'idle' | 'running' | 'done' | 'error';
+  classifyProgress: { done: number; total: number; labels: number; review: number };
+  classifyError: string | null;
+  classifyAll: (opts?: { force?: boolean; limit?: number; source?: 'all' | 'linkedin' | 'sn' }) => Promise<void>;
+
+  // Long-running LinkedIn full API re-sync. Same pattern as classify — state
+  // in the store so the progress bar keeps ticking even if the user leaves
+  // Diagnostics. Driven by extension postMessage events.
+  liSyncState: 'idle' | 'running' | 'done' | 'error';
+  liSyncMsg: string;
+  startLinkedInFullSync: () => void;
+
+  // Long-running recover-missing-messages run. Visits sparse-message convs in
+  // the background, can take many minutes. Logs accumulate in liveLog.
+  recoverState: 'idle' | 'running' | 'done' | 'error';
+  recoverLog: string[];
+  startRecover: () => void;
 
   // Auto-refresh — polls /api/state and reloads conversations when the DB has
   // grown (i.e. the extension just pushed new data). Returns a cleanup fn.
@@ -382,6 +403,127 @@ export const useStore = create<AppState>()((set, get) => ({
   setSyncStatus: (s) => set({ syncStatus: s }),
   lastSyncedAt: null,
   setLastSyncedAt: (t) => set({ lastSyncedAt: t }),
+
+  // ─── AI classify (long-running, survives navigation) ───────────────────────
+  classifyState: 'idle',
+  classifyProgress: { done: 0, total: 0, labels: 0, review: 0 },
+  classifyError: null,
+  classifyAll: async (opts = {}) => {
+    const state = get();
+    if (state.classifyState === 'running') return;
+    const { force = false, limit, source = 'all' } = opts;
+
+    set({
+      classifyState: 'running',
+      classifyError: null,
+      classifyProgress: { done: 0, total: 0, labels: 0, review: 0 },
+    });
+
+    try {
+      const r = await fetch('/api/ai/classify-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force, ...(limit ? { limit } : {}), source }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error ?? `HTTP ${r.status}`);
+      const ids: string[] = d.ids ?? [];
+      if (ids.length === 0) {
+        set({ classifyState: 'done' });
+        return;
+      }
+      set({ classifyProgress: { done: 0, total: ids.length, labels: 0, review: 0 } });
+      const CHUNK = 25;
+      for (let i = 0; i < ids.length; i += CHUNK) {
+        const slice = ids.slice(i, i + CHUNK);
+        const cr = await fetch('/api/ai/classify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ conversationIds: slice, force }),
+        });
+        const cd = await cr.json();
+        if (!cr.ok) throw new Error(cd.error ?? `HTTP ${cr.status}`);
+        const prev = get().classifyProgress;
+        set({
+          classifyProgress: {
+            done: prev.done + slice.length,
+            total: ids.length,
+            labels: prev.labels + (cd.labelsApplied ?? 0),
+            review: prev.review + (cd.reviewFlagged ?? 0),
+          },
+        });
+      }
+      set({ classifyState: 'done' });
+      // Pull fresh labels + conversations so freshly-applied labels render
+      await get().loadFromServer();
+    } catch (e) {
+      set({
+        classifyState: 'error',
+        classifyError: e instanceof Error ? e.message : 'Classify failed',
+      });
+    }
+  },
+
+  // ─── LinkedIn full re-sync ─────────────────────────────────────────────────
+  liSyncState: 'idle',
+  liSyncMsg: '',
+  startLinkedInFullSync: () => {
+    if (get().liSyncState === 'running') return;
+    set({ liSyncState: 'running', liSyncMsg: 'Starting…' });
+    const onMsg = (ev: MessageEvent) => {
+      if (ev.source !== window || !ev.data) return;
+      if (ev.data.type === 'relay-li-api-sync-progress') {
+        const p = ev.data.progress || {};
+        if (p.phase === 'inbox') set({ liSyncMsg: `Pulling ${p.category || ''} · ${p.convs ?? 0} convs` });
+        else if (p.phase === 'messages') set({ liSyncMsg: `Fetching messages · ${p.fetched ?? 0} / ${p.total ?? 0} threads` });
+      }
+      if (ev.data.type === 'relay-li-initial-sync-api-result') {
+        window.removeEventListener('message', onMsg);
+        const r = ev.data.response;
+        if (r?.ok) {
+          set({ liSyncState: 'done', liSyncMsg: `Done · ${r.convs ?? 0} convs · ${r.msgs ?? 0} msgs` });
+          // Pull fresh data into the store
+          get().loadFromServer();
+        } else {
+          set({ liSyncState: 'error', liSyncMsg: r?.reason ?? 'Sync failed' });
+        }
+      }
+    };
+    window.addEventListener('message', onMsg);
+    window.postMessage({ type: 'relay-li-initial-sync-api', deepFetch: true }, '*');
+  },
+
+  // ─── Recover missing messages ──────────────────────────────────────────────
+  recoverState: 'idle',
+  recoverLog: [],
+  startRecover: () => {
+    if (get().recoverState === 'running') return;
+    const stamp = () => new Date().toLocaleTimeString();
+    set({ recoverState: 'running', recoverLog: [`[${stamp()}] Starting recovery…`] });
+    const append = (line: string) =>
+      set({ recoverLog: [...get().recoverLog, `[${stamp()}] ${line}`] });
+
+    const onMsg = (ev: MessageEvent) => {
+      if (ev.source !== window || !ev.data) return;
+      if (ev.data.type === 'relay-refresh-progress') {
+        append(ev.data.message ?? '');
+      }
+      if (ev.data.type === 'relay-recover-result') {
+        window.removeEventListener('message', onMsg);
+        const r = ev.data.response;
+        if (r?.ok) {
+          append(`Done · recovered ${r.recovered ?? 0} threads`);
+          set({ recoverState: 'done' });
+          get().loadFromServer();
+        } else {
+          append(`Failed: ${r?.reason ?? 'unknown'}`);
+          set({ recoverState: 'error' });
+        }
+      }
+    };
+    window.addEventListener('message', onMsg);
+    window.postMessage({ type: 'relay-recover-request' }, '*');
+  },
 
   // ─── Bootstrap ──────────────────────────────────────────────────────────────
   hasLoaded: false,

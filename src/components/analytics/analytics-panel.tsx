@@ -372,11 +372,15 @@ function ActivitySection({ from, to }: { from: string; to: string }) {
     if (to) qs.set('to', to);
     fetch(`/api/analytics/activity${qs.toString() ? `?${qs}` : ''}`)
       .then((r) => r.json())
-      .then(setAct)
+      .then((data) => {
+        // Endpoint can return `{error}` on failure. Don't shove that into
+        // `act` — downstream reads `act.window.days` and crashes.
+        if (data && data.window) setAct(data);
+      })
       .catch(() => {});
   }, [from, to]);
 
-  if (!act) return null;
+  if (!act || !act.window) return null;
 
   return (
     <section className="card p-5 mt-6">

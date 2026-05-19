@@ -9,7 +9,7 @@ import { join } from 'path';
 
 // POST { url, profileSlug, body } — receives one SDUI component response
 // from LinkedIn's profile rendering. Two jobs:
-//   1. Persist a raw sample under /tmp/inboxpro-sdui/ so we can iterate on
+//   1. Persist a raw sample under /tmp/relay-sdui/ so we can iterate on
 //      the parser when LinkedIn shifts shape.
 //   2. Extract structured fields (about, prevRoles, education, recentPosts,
 //      skills, jobChangeSignal) via parseSdui, then merge into the matching
@@ -18,7 +18,7 @@ import { join } from 'path';
 // Conservative: never CREATES a Contact from this path. Only enriches
 // existing ones found by profileSlug.
 
-const OUT_DIR = '/tmp/inboxpro-sdui';
+const OUT_DIR = '/tmp/relay-sdui';
 
 function safeName(s: string): string {
   return s.replace(/[^a-zA-Z0-9.-]/g, '_').slice(0, 120);

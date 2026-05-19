@@ -1,22 +1,17 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // Standalone output: emits .next/standalone/server.js with only the
-  // runtime deps Next.js actually needs. We bundle that into the Tauri
-  // .app along with a Node binary so the user never has to install
-  // Node/npm/dependencies themselves.
-  output: "standalone",
-
-  // Native deps that Next.js can't bundle through webpack (better-sqlite3
-  // has a .node binary; Prisma has a platform-specific query engine).
-  // Marked external so they resolve at runtime via standalone's
-  // node_modules instead of being inlined.
-  serverExternalPackages: [
-    "@prisma/client",
-    "@prisma/adapter-better-sqlite3",
-    "better-sqlite3",
-    "prisma",
-  ],
+  // Static export: emits a folder of plain HTML/CSS/JS in /out. No
+  // server. Electron loads index.html via its app:// protocol and
+  // intercepts /api/* fetches to route them to backend handlers in
+  // electron/api/ — see electron/main.js.
+  output: "export",
+  // file:// loading + custom protocols don't have a real origin, so
+  // disable image optimization (it relies on a server route).
+  images: { unoptimized: true },
+  // The UI hits /api/X paths via relative fetch. With trailing slash
+  // disabled the URLs stay clean (/api/state, not /api/state/).
+  trailingSlash: false,
 };
 
 export default nextConfig;

@@ -13,6 +13,7 @@ import { TasksPanel } from '@/components/tasks/tasks-panel';
 import { ReviewPanel } from '@/components/review/review-panel';
 import { WelcomePanel } from '@/components/welcome/welcome-panel';
 import { OnboardingWizard } from '@/components/welcome/onboarding-wizard';
+import { AccountMismatchBanner } from '@/components/shared/account-mismatch-banner';
 import { useStore } from '@/store';
 import { storage } from '@/lib/storage';
 
@@ -40,7 +41,7 @@ export default function Home() {
   useEffect(() => {
     function onMessage(ev: MessageEvent) {
       if (ev.source !== window || !ev.data) return;
-      if (ev.data.type === 'inboxpro-thread-updated') {
+      if (ev.data.type === 'relay-thread-updated') {
         // Reload conversations to pick up new lastMessage/lastMessageAt, AND
         // refresh the active thread's messages if it's the affected one.
         // loadMessages atomically replaces — no need to clear first.
@@ -251,7 +252,7 @@ export default function Home() {
         try {
           const n = new Notification(`Follow up: ${name}`, {
             body,
-            tag: `inboxpro-followup-${c.id}`,
+            tag: `relay-followup-${c.id}`,
           });
           n.onclick = () => {
             window.focus();
@@ -307,14 +308,19 @@ export default function Home() {
       if (params.get('onboard') === '1') setPreviewWizard(true);
     } catch {}
   }, []);
-  const showOnboarding = previewWizard ||
-    (conversations.length === 0 && !onboarded && !isSettings && !isAnalytics && !isDiagnostics && !isQueue && !isContacts && !isTasks && !isReview);
-  const showWelcome = !previewWizard && conversations.length === 0 && onboarded && !isSettings && !isAnalytics && !isDiagnostics && !isQueue && !isContacts && !isTasks && !isReview;
+  // Onboarding stays visible until the user explicitly completes it
+  // (`storage.onboarded.set(true)` in the wizard). Without this, the SN
+  // auto-poll arriving with even one conversation dismissed the wizard
+  // mid-flow.
+  const inDefaultView = !isSettings && !isAnalytics && !isDiagnostics && !isQueue && !isContacts && !isTasks && !isReview;
+  const showOnboarding = previewWizard || (!onboarded && inDefaultView);
+  const showWelcome = !showOnboarding && conversations.length === 0 && inDefaultView;
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[var(--color-bg)] p-3 gap-3">
+    <div className="flex h-full overflow-hidden bg-[var(--color-bg)] p-3 gap-3">
       <Sidebar />
       <div className="flex flex-1 min-w-0 overflow-hidden flex-col gap-3">
+        <AccountMismatchBanner />
         {importBanner && (
           <div className="card px-4 py-2 text-[12px] font-medium text-[var(--color-accent-fg)] bg-[var(--color-accent-soft)] border-[var(--color-accent)] text-center flex-shrink-0">
             {importBanner}

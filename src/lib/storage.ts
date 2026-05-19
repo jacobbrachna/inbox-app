@@ -1,5 +1,5 @@
 // Central typed wrapper around localStorage. Every persisted-client-state
-// key in InboxPro lives here so we can grep one place to see what's
+// key in Relay lives here so we can grep one place to see what's
 // stashed in the user's browser.
 //
 // NOT covered: the early-paint script in `src/app/layout.tsx`, which reads
@@ -12,15 +12,37 @@ export type SidebarMode = 'auto' | 'expanded' | 'collapsed';
 const KEYS = {
   theme: 'inbox-theme',
   accentRgb: 'inbox-accent-rgb',
-  onboarded: 'inboxpro-onboarded',
-  onboardingStep: 'inboxpro-onboarding-step',
-  sidebarMode: 'inboxpro-sidebar-mode',
-  currentRoleOnly: 'inboxpro-current-role-only',
-  seenTabNotice: 'inboxpro-seen-tab-notice',
-  notificationsMuted: 'inboxpro-notifications-desktop-muted',
-  notificationsSeenIds: 'inboxpro-notifications-seen-ids',
-  columnWidth: (id: string) => `inboxpro-col-${id}`,
+  onboarded: 'relay-onboarded',
+  onboardingStep: 'relay-onboarding-step',
+  sidebarMode: 'relay-sidebar-mode',
+  currentRoleOnly: 'relay-current-role-only',
+  seenTabNotice: 'relay-seen-tab-notice',
+  notificationsMuted: 'relay-notifications-desktop-muted',
+  notificationsSeenIds: 'relay-notifications-seen-ids',
+  columnWidth: (id: string) => `relay-col-${id}`,
 } as const;
+
+// One-shot migration from the InboxPro era. Renames `inboxpro-*` keys to
+// `relay-*` so the user's onboarding flag, sidebar mode, column widths,
+// etc. survive the rebrand. Idempotent — runs once, then a sentinel keeps
+// it from re-running.
+(function migrateLegacyKeys() {
+  if (typeof window === 'undefined') return;
+  try {
+    if (window.localStorage.getItem('relay-migrated-from-inboxpro') === '1') return;
+    const ls = window.localStorage;
+    for (let i = 0; i < ls.length; i++) {
+      const k = ls.key(i);
+      if (k && k.startsWith('inboxpro-')) {
+        const v = ls.getItem(k);
+        if (v != null) ls.setItem('relay-' + k.slice('inboxpro-'.length), v);
+        ls.removeItem(k);
+        i--; // collection shrank
+      }
+    }
+    ls.setItem('relay-migrated-from-inboxpro', '1');
+  } catch {}
+})();
 
 // Safe wrappers — every call is guarded against SSR and storage-disabled
 // browsers. Throws are swallowed; getters fall back to the default.

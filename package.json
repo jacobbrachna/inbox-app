@@ -1,7 +1,8 @@
 {
   "name": "inbox-app",
-  "version": "0.1.0",
+  "version": "0.1.4",
   "private": true,
+  "main": "electron/main.js",
   "scripts": {
     "setup": "bash setup.sh",
     "update": "bash setup.sh --update",
@@ -13,7 +14,9 @@
     "lint": "eslint",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "electron": "bash scripts/dev-rename-electron.sh && electron .",
+    "dist": "bash scripts/electron-dist.sh"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.95.2",
@@ -31,6 +34,7 @@
     "better-sqlite3": "^12.9.0",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
+    "electron-updater": "^6.8.3",
     "lucide-react": "^1.14.0",
     "next": "16.2.6",
     "prisma": "^7.8.0",
@@ -38,15 +42,20 @@
     "react-dom": "19.2.4",
     "swr": "^2.4.1",
     "tailwind-merge": "^3.5.0",
+    "ws": "^8.20.1",
     "zustand": "^5.0.13"
   },
   "devDependencies": {
+    "@electron/notarize": "^3.1.1",
     "@tailwindcss/postcss": "^4",
     "@tauri-apps/cli": "^2.11.2",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "dotenv": "^17.4.2",
+    "electron": "^33.4.11",
+    "electron-builder": "^26.8.1",
+    "esbuild": "^0.28.0",
     "eslint": "^9",
     "eslint-config-next": "16.2.6",
     "tailwindcss": "^4",

@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { Eye, EyeOff, Check, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/cn';
+import { useStore } from '@/store';
 
 export function AiSettings() {
   const [hasKey, setHasKey] = useState(false);
@@ -12,8 +13,24 @@ export function AiSettings() {
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [classifyState, setClassifyState] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
-  const [classifyMsg, setClassifyMsg] = useState('');
+  // Classify state lives in the global store so progress survives navigation.
+  // We derive the inline status message from the store's progress counters.
+  const classifyState = useStore((s) => s.classifyState);
+  const classifyProgress = useStore((s) => s.classifyProgress);
+  const classifyError = useStore((s) => s.classifyError);
+  const runClassify = useStore((s) => s.classifyAll);
+  const classifyMsg =
+    classifyState === 'running'
+      ? classifyProgress.total === 0
+        ? 'Finding unclassified conversations…'
+        : `Classifying ${classifyProgress.done}–${Math.min(classifyProgress.done + 25, classifyProgress.total)} of ${classifyProgress.total}…`
+      : classifyState === 'done'
+        ? classifyProgress.total === 0
+          ? 'Everything is already classified.'
+          : `Classified ${classifyProgress.total} conversations.`
+        : classifyState === 'error'
+          ? classifyError ?? 'Failed'
+          : '';
 
   useEffect(() => {
     fetch('/api/ai/key')
@@ -62,42 +79,10 @@ export function AiSettings() {
     }
   }
 
+  // Delegates to the store's classifyAll so both this panel and Diagnostics
+  // share a single in-flight run + progress.
   async function classifyAll() {
-    setClassifyState('running');
-    setClassifyMsg('Finding unclassified conversations…');
-    try {
-      // Fetch all conv IDs that haven't been AI-classified yet
-      const r = await fetch('/api/conversations/unclassified');
-      const { ids } = (await r.json()) as { ids: string[] };
-      if (!ids.length) {
-        setClassifyState('done');
-        setClassifyMsg('Everything is already classified.');
-        setTimeout(() => { setClassifyState('idle'); setClassifyMsg(''); }, 4000);
-        return;
-      }
-      const BATCH = 25;
-      let done = 0;
-      for (let i = 0; i < ids.length; i += BATCH) {
-        const batch = ids.slice(i, i + BATCH);
-        setClassifyMsg(`Classifying ${done + 1}–${Math.min(done + batch.length, ids.length)} of ${ids.length}…`);
-        const resp = await fetch('/api/ai/classify', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ conversationIds: batch }),
-        });
-        if (!resp.ok) {
-          const err = await resp.json().catch(() => ({}));
-          throw new Error(err.error ?? `HTTP ${resp.status}`);
-        }
-        done += batch.length;
-      }
-      setClassifyState('done');
-      setClassifyMsg(`Classified ${ids.length} conversations.`);
-      setTimeout(() => { setClassifyState('idle'); setClassifyMsg(''); }, 6000);
-    } catch (e) {
-      setClassifyState('error');
-      setClassifyMsg(e instanceof Error ? e.message : 'Failed');
-    }
+    await runClassify();
   }
 
   return (

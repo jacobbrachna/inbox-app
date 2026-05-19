@@ -5,7 +5,7 @@ import { CORS, optionsResponse } from '@/lib/api-utils';
 // GET → { exists, messageable }
 // Used by the extension's content scripts to decide whether to silently
 // refresh an existing contact (messageable=true) or wait for an explicit
-// "Import to InboxPro" button click (messageable=false). Definition:
+// "Import to Relay" button click (messageable=false). Definition:
 // messageable = Contact has at least one linked Conversation.
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ slug: string }> }) {
   const { slug } = await ctx.params;

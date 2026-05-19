@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { AppErrorBoundary } from "@/components/shared/error-boundary";
+import { WsBridge } from "@/lib/ws-bridge";
 
 export const metadata: Metadata = {
-  title: "InboxPro — LinkedIn Inbox Manager",
+  title: "Relay — LinkedIn Inbox Manager",
   description: "Unified LinkedIn and Sales Navigator inbox with labels, snooze, and snippets",
 };
 
@@ -41,8 +42,12 @@ export default function RootLayout({
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
       </head>
-      <body className="h-full" suppressHydrationWarning>
-        <AppErrorBoundary>{children}</AppErrorBoundary>
+      <body className="h-full flex flex-col" suppressHydrationWarning>
+        <div className="electron-titlebar" aria-hidden />
+        <WsBridge />
+        <div className="flex-1 min-h-0">
+          <AppErrorBoundary>{children}</AppErrorBoundary>
+        </div>
       </body>
     </html>
   );

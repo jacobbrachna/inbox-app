@@ -198,7 +198,7 @@ export function BulkActionBar({ visibleCount }: BulkActionBarProps) {
               Delete {count} conversation{count === 1 ? '' : 's'}?
             </h3>
             <p className="text-[13px] text-[var(--color-text-secondary)] mb-5">
-              This removes them from InboxPro.{' '}
+              This removes them from Relay.{' '}
               <strong className="text-[var(--color-text-primary)]">
                 Does not delete from LinkedIn unless mirror is enabled.
               </strong>

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Rebuild + restart InboxPro in production mode.
-# Use after making code changes to a prod-running InboxPro:
+# Rebuild + restart Relay in production mode.
+# Use after making code changes to a prod-running Relay:
 #   npm run restart
 #
 # Builds the Next.js bundle, kills any process holding port 3030, then starts
-# the production server in the background. Logs go to /tmp/inboxpro-prod.log.
+# the production server in the background. Logs go to /tmp/relay-prod.log.
 
 set -e
 cd "$(dirname "$0")/.."
@@ -27,7 +27,7 @@ if [ -n "$PID" ]; then
 fi
 
 echo "→ Starting prod server on :3030…"
-LOG=/tmp/inboxpro-prod.log
+LOG=/tmp/relay-prod.log
 nohup npm run start > "$LOG" 2>&1 &
 NEW_PID=$!
 disown

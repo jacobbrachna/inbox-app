@@ -12,8 +12,8 @@
 set -e
 cd "$(dirname "$0")/.."
 
-LOG=/tmp/inboxpro-prod.log
-PIDFILE=/tmp/inboxpro-prod.pid
+LOG=/tmp/relay-prod.log
+PIDFILE=/tmp/relay-prod.pid
 
 # ── 1. Already running? ────────────────────────────────────────────────
 if curl -sf -o /dev/null http://localhost:3030/api/state 2>/dev/null; then

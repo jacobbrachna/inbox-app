@@ -1,4 +1,4 @@
-// Re-run the SDUI parser over already-captured samples in /tmp/inboxpro-sdui/
+// Re-run the SDUI parser over already-captured samples in /tmp/relay-sdui/
 // and update matching Contacts. Useful when the parser gets fixed and we
 // don't want to ask the user to re-trigger every profile.
 //
@@ -12,7 +12,7 @@ import { join } from 'path';
 const dbUrl = (process.env.DATABASE_URL ?? 'file:./dev.db').replace(/^file:/, '');
 const prisma = new PrismaClient({ adapter: new PrismaBetterSqlite3({ url: dbUrl }) });
 
-const DIR = '/tmp/inboxpro-sdui';
+const DIR = '/tmp/relay-sdui';
 
 // Inline parser (mirrors src/lib/sdui-parse.ts)
 const TEXT_RE = /"children":\["((?!\$)(?:[^"\\]|\\.){1,8000})"/g;

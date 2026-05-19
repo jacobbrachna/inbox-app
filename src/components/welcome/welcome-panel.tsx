@@ -26,10 +26,10 @@ export function WelcomePanel() {
   useEffect(() => {
     function onMessage(ev: MessageEvent) {
       if (ev.source !== window || !ev.data) return;
-      if (ev.data.type === 'inboxpro-refresh-progress') {
+      if (ev.data.type === 'relay-refresh-progress') {
         setProgress(ev.data.message);
       }
-      if (ev.data.type === 'inboxpro-full-sync-result') {
+      if (ev.data.type === 'relay-full-sync-result') {
         const r = ev.data.response;
         if (r?.ok) {
           setState('done');
@@ -52,7 +52,7 @@ export function WelcomePanel() {
     }
     setState('syncing');
     setProgress('Starting…');
-    window.postMessage({ type: 'inboxpro-full-sync-request' }, '*');
+    window.postMessage({ type: 'relay-full-sync-request' }, '*');
   }
 
   return (
@@ -62,7 +62,7 @@ export function WelcomePanel() {
           <span className="text-[22px] font-bold text-[var(--color-accent-fg)]">i</span>
         </div>
         <h2 className="text-[24px] font-semibold tracking-tight text-[var(--color-text-primary)] mb-2">
-          Welcome to InboxPro
+          Welcome to Relay
         </h2>
         <p className="text-[13px] text-[var(--color-text-secondary)] mb-7">
           Your LinkedIn DMs and Sales Navigator threads, in one place.

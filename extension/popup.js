@@ -102,7 +102,7 @@ syncBtn.addEventListener('click', async () => {
     if (count === 0) {
       setStatus('No conversations found. Debug copied to clipboard.', 'error');
       const dbg = result?.debugLog || 'no debug info';
-      console.log('[InboxPro debug]\n' + dbg);
+      console.log('[Relay debug]\n' + dbg);
       try { await navigator.clipboard.writeText(dbg); } catch (e) {}
       hintEl.textContent = 'Paste the clipboard in chat.';
       return;
@@ -112,7 +112,7 @@ syncBtn.addEventListener('click', async () => {
     progressEl.textContent = `Loaded ${count} conversations · ${msgCount} messages`;
     setStatus(`Synced ${count} conversations & ${msgCount} messages`, 'success');
 
-    // Send to background to open InboxPro
+    // Send to background to open Relay
     await chrome.runtime.sendMessage({
       action: 'openApp',
       conversations,
@@ -123,7 +123,7 @@ syncBtn.addEventListener('click', async () => {
 
   } catch (e) {
     setStatus('Error: ' + e.message, 'error');
-    console.error('[InboxPro]', e);
+    console.error('[Relay]', e);
   } finally {
     syncBtn.disabled = false;
     syncBtn.innerHTML = `
@@ -132,6 +132,6 @@ syncBtn.addEventListener('click', async () => {
         <path d="M3.51 15a9 9 0 1 0 .49-4.79"></path>
       </svg>
       Sync Now`;
-    hintEl.textContent = 'Make sure InboxPro is running on localhost:3030';
+    hintEl.textContent = 'Make sure Relay is running on localhost:3030';
   }
 });

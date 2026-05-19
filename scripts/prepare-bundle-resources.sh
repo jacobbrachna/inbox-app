@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Assemble all the runtime resources that need to ship inside InboxPro.app
+# Assemble all the runtime resources that need to ship inside Relay.app
 # into a single src-tauri/resources/ tree. Tauri's `bundle.resources`
 # glob-mapping flattens nested directory structure, so we copy ourselves
 # into a single root directory and reference that root as a unit.

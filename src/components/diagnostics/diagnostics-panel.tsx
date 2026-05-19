@@ -230,12 +230,22 @@ export function DiagnosticsPanel() {
   const [log, setLog] = useState<LogEntry[]>([]);
   const bridgeReady = useExtensionReady();
   const [autoRefresh, setAutoRefresh] = useState(true);
-  const [liSyncState, setLiSyncState] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
-  const [liSyncMsg, setLiSyncMsg] = useState('');
-  const [classifyState, setClassifyState] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
-  const [classifyProgress, setClassifyProgress] = useState({ done: 0, total: 0, labels: 0, review: 0 });
-  const [classifyError, setClassifyError] = useState<string | null>(null);
+  const liSyncState = useStore((s) => s.liSyncState);
+  const liSyncMsg = useStore((s) => s.liSyncMsg);
+  const startLinkedInFullSync = useStore((s) => s.startLinkedInFullSync);
+  // Classify state lives in the store so progress survives navigating away
+  // from Diagnostics and back. Local-only state is the per-panel counts +
+  // quick-classify form controls.
+  const classifyState = useStore((s) => s.classifyState);
+  const classifyProgress = useStore((s) => s.classifyProgress);
+  const classifyError = useStore((s) => s.classifyError);
+  const classifyAll = useStore((s) => s.classifyAll);
   const [classifyCounts, setClassifyCounts] = useState<{ eligible: number; pending: number } | null>(null);
+  // Quick-classify controls — pick a count + source and fire a targeted run
+  // against the most-recent N convs. Used for fast testing/iteration without
+  // waiting on a full backlog pass.
+  const [quickCount, setQuickCount] = useState(25);
+  const [quickSource, setQuickSource] = useState<'all' | 'linkedin' | 'sn'>('all');
   const loadFromServer = useStore((s) => s.loadFromServer);
 
   async function loadAll() {
@@ -280,83 +290,25 @@ export function DiagnosticsPanel() {
   }
 
   function forceRefresh() {
-    window.postMessage({ type: 'inboxpro-refresh-request' }, '*');
+    window.postMessage({ type: 'relay-refresh-request' }, '*');
   }
 
-  async function classifyAll(force = false) {
-    if (classifyState === 'running') return;
-    setClassifyState('running');
-    setClassifyError(null);
-    setClassifyProgress({ done: 0, total: 0, labels: 0, review: 0 });
-    try {
-      const r = await fetch('/api/ai/classify-all', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ force }),
-      });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error ?? `HTTP ${r.status}`);
-      const ids: string[] = d.ids ?? [];
-      if (ids.length === 0) {
-        setClassifyState('done');
-        setClassifyProgress({ done: 0, total: 0, labels: 0, review: 0 });
-        return;
-      }
-      setClassifyProgress({ done: 0, total: ids.length, labels: 0, review: 0 });
-      const CHUNK = 25;
-      for (let i = 0; i < ids.length; i += CHUNK) {
-        const slice = ids.slice(i, i + CHUNK);
-        const cr = await fetch('/api/ai/classify', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ conversationIds: slice, force }),
-        });
-        const cd = await cr.json();
-        if (!cr.ok) throw new Error(cd.error ?? `HTTP ${cr.status}`);
-        setClassifyProgress((p) => ({
-          done: p.done + slice.length,
-          total: ids.length,
-          labels: p.labels + (cd.labelsApplied ?? 0),
-          review: p.review + (cd.reviewFlagged ?? 0),
-        }));
-      }
-      setClassifyState('done');
-      // Refresh labels + conversations so freshly-applied labels render with names
-      await loadFromServer();
-      loadClassifyCounts();
-    } catch (e) {
-      setClassifyState('error');
-      setClassifyError(e instanceof Error ? e.message : 'Classify failed');
-    }
+  // Wrapper to refresh the local pending-count display once the store's
+  // classifyAll finishes. Accepts the same options shape (or `true` for
+  // legacy "force everything").
+  async function runClassify(opts: { force?: boolean; limit?: number; source?: 'all' | 'linkedin' | 'sn' } | boolean = {}) {
+    const o = typeof opts === 'boolean' ? { force: opts } : opts;
+    await classifyAll(o);
+    loadClassifyCounts();
   }
 
+  // The full LI re-sync now lives in the store so the progress bar keeps
+  // ticking even when the user navigates away from Diagnostics. We wrap it
+  // here so the local panel-stats reload runs after.
   function startFullLiSync() {
-    if (liSyncState === 'running') return;
-    setLiSyncState('running');
-    setLiSyncMsg('Starting…');
-
-    function onMsg(ev: MessageEvent) {
-      if (ev.source !== window || !ev.data) return;
-      if (ev.data.type === 'inboxpro-li-api-sync-progress') {
-        const p = ev.data.progress || {};
-        if (p.phase === 'inbox') setLiSyncMsg(`Pulling ${p.category || ''} · ${p.convs ?? 0} convs`);
-        else if (p.phase === 'messages') setLiSyncMsg(`Fetching messages · ${p.fetched ?? 0} / ${p.total ?? 0} threads`);
-      }
-      if (ev.data.type === 'inboxpro-li-initial-sync-api-result') {
-        window.removeEventListener('message', onMsg);
-        const r = ev.data.response;
-        if (r?.ok) {
-          setLiSyncState('done');
-          setLiSyncMsg(`Done · ${r.convs ?? 0} convs · ${r.msgs ?? 0} msgs`);
-          loadAll();
-        } else {
-          setLiSyncState('error');
-          setLiSyncMsg(r?.reason ?? 'Sync failed');
-        }
-      }
-    }
-    window.addEventListener('message', onMsg);
-    window.postMessage({ type: 'inboxpro-li-initial-sync-api', deepFetch: true }, '*');
+    startLinkedInFullSync();
+    // Reload diagnostics stats once the store transitions to done — handled
+    // by the existing autoRefresh interval, no extra wiring needed.
   }
 
   return (
@@ -524,7 +476,7 @@ export function DiagnosticsPanel() {
             {liSyncState === 'running' ? liSyncMsg : liSyncState === 'done' ? `✓ ${liSyncMsg}` : liSyncState === 'error' ? `✗ ${liSyncMsg}` : 'Full LinkedIn re-sync'}
           </button>
           <button
-            onClick={() => classifyAll(false)}
+            onClick={() => runClassify(false)}
             disabled={classifyState === 'running' || classifyCounts?.pending === 0}
             className="flex items-center gap-2 px-3 py-2 bg-[var(--color-card)] hover:bg-[var(--color-card-hover)] border border-[var(--color-hairline)] text-[var(--color-text-secondary)] disabled:opacity-50 disabled:cursor-not-allowed text-sm rounded-lg"
             style={{ transition: 'background-color 140ms var(--ease-out-quart)' }}
@@ -541,7 +493,7 @@ export function DiagnosticsPanel() {
             <button
               onClick={() => {
                 if (confirm(`Re-classify all ${classifyCounts.eligible} conversations? This overwrites existing AI labels and follow-ups. Estimated time: ~${formatDuration(classifyCounts.eligible)}.`)) {
-                  classifyAll(true);
+                  runClassify(true);
                 }
               }}
               disabled={classifyState === 'running'}
@@ -554,6 +506,45 @@ export function DiagnosticsPanel() {
             </button>
           )}
           <ResetButton onDone={loadAll} />
+        </div>
+
+        {/* Quick classify — targeted runs against the most-recent N convs by
+            source. Use for fast iteration when "Classify all" would take too
+            long. force=true so it re-classifies even already-summarized convs. */}
+        <div className="mt-4 pt-4 border-t border-[var(--color-hairline)] flex items-center gap-2 flex-wrap">
+          <span className="text-[12px] text-[var(--color-text-secondary)] mr-1">
+            Quick classify
+          </span>
+          <select
+            value={quickCount}
+            onChange={(e) => setQuickCount(parseInt(e.target.value, 10))}
+            disabled={classifyState === 'running'}
+            className="px-2 py-1.5 bg-[var(--color-card)] border border-[var(--color-hairline)] rounded-lg text-[12px] text-[var(--color-text-primary)] disabled:opacity-50"
+          >
+            <option value={10}>10 most recent</option>
+            <option value={25}>25 most recent</option>
+            <option value={50}>50 most recent</option>
+            <option value={100}>100 most recent</option>
+          </select>
+          <select
+            value={quickSource}
+            onChange={(e) => setQuickSource(e.target.value as 'all' | 'linkedin' | 'sn')}
+            disabled={classifyState === 'running'}
+            className="px-2 py-1.5 bg-[var(--color-card)] border border-[var(--color-hairline)] rounded-lg text-[12px] text-[var(--color-text-primary)] disabled:opacity-50"
+          >
+            <option value="all">All sources</option>
+            <option value="linkedin">LinkedIn only</option>
+            <option value="sn">Sales Nav only</option>
+          </select>
+          <button
+            onClick={() => runClassify({ limit: quickCount, source: quickSource, force: true })}
+            disabled={classifyState === 'running'}
+            className="flex items-center gap-2 px-3 py-1.5 bg-[var(--color-accent-deep)] hover:bg-[var(--color-accent)] disabled:opacity-50 disabled:cursor-not-allowed text-white text-[12px] font-medium rounded-lg"
+            style={{ transition: 'background-color 140ms var(--ease-out-quart)' }}
+          >
+            <Sparkles className={cn('w-3.5 h-3.5', classifyState === 'running' && 'animate-pulse')} />
+            Run
+          </button>
         </div>
       </section>
 

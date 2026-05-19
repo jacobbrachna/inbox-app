@@ -110,7 +110,7 @@ export function NotificationBell() {
     try {
       const dn = new Notification(n.title, {
         body: n.body,
-        tag: `inboxpro-${n.id}`, // dedupe at the OS level
+        tag: `relay-${n.id}`, // dedupe at the OS level
         icon: '/favicon.ico',
       });
       dn.onclick = () => {
@@ -315,7 +315,7 @@ export function NotificationBell() {
                 <button
                   onClick={requestPermission}
                   className="text-[11px] font-semibold text-[var(--color-accent)] hover:text-[var(--color-accent-deep)] inline-flex items-center gap-1"
-                  title="Allow browser desktop alerts when InboxPro is in the background"
+                  title="Allow browser desktop alerts when Relay is in the background"
                 >
                   <Bell className="w-3 h-3" /> Enable desktop alerts
                 </button>
@@ -333,10 +333,10 @@ export function NotificationBell() {
                   <button
                     onClick={() => {
                       try {
-                        const n = new Notification('InboxPro test alert', {
+                        const n = new Notification('Relay test alert', {
                           body: 'If you see this, desktop notifications are working.',
                           icon: '/favicon.ico',
-                          tag: `inboxpro-test-${Date.now()}`,
+                          tag: `relay-test-${Date.now()}`,
                         });
                         n.onclick = () => { window.focus(); n.close(); };
                       } catch (e) {

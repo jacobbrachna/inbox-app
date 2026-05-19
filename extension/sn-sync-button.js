@@ -85,10 +85,10 @@
   // ── UI ────────────────────────────────────────────────────────────────────
   const style = document.createElement('style');
   style.textContent = `
-    @keyframes inboxpro-sn-fade-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-    @keyframes inboxpro-sn-pulse { 0%,100% { box-shadow: 0 8px 24px rgba(37,99,235,.24), 0 0 0 0 rgba(37,99,235,.30); } 50% { box-shadow: 0 8px 24px rgba(37,99,235,.18), 0 0 0 6px rgba(37,99,235,0); } }
-    @keyframes inboxpro-sn-spin { to { transform: rotate(360deg); } }
-    #inboxpro-sn-card {
+    @keyframes relay-sn-fade-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes relay-sn-pulse { 0%,100% { box-shadow: 0 8px 24px rgba(37,99,235,.24), 0 0 0 0 rgba(37,99,235,.30); } 50% { box-shadow: 0 8px 24px rgba(37,99,235,.18), 0 0 0 6px rgba(37,99,235,0); } }
+    @keyframes relay-sn-spin { to { transform: rotate(360deg); } }
+    #relay-sn-card {
       position: fixed; bottom: 24px; right: 24px; z-index: 99999;
       background: #fff; color: #18181B;
       border: 1px solid #E5E5E5; border-radius: 14px;
@@ -96,93 +96,93 @@
       box-shadow: 0 12px 28px rgba(0,0,0,.12), 0 2px 6px rgba(0,0,0,.06);
       font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
       font-size: 13px;
-      animation: inboxpro-sn-fade-in 280ms cubic-bezier(.25,1,.5,1);
+      animation: relay-sn-fade-in 280ms cubic-bezier(.25,1,.5,1);
       -webkit-font-smoothing: antialiased;
     }
     @media (prefers-color-scheme: dark) {
-      #inboxpro-sn-card { background: #161616; color: #FAFAFA; border-color: #262626; }
-      .inboxpro-sn-progress { color: #A1A1A1 !important; }
-      .inboxpro-sn-phase { color: #71717A !important; }
-      .inboxpro-sn-close { color: #71717A !important; }
-      .inboxpro-sn-close:hover { background: #1E1E1E !important; color: #FAFAFA !important; }
+      #relay-sn-card { background: #161616; color: #FAFAFA; border-color: #262626; }
+      .relay-sn-progress { color: #A1A1A1 !important; }
+      .relay-sn-phase { color: #71717A !important; }
+      .relay-sn-close { color: #71717A !important; }
+      .relay-sn-close:hover { background: #1E1E1E !important; color: #FAFAFA !important; }
     }
-    .inboxpro-sn-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
-    .inboxpro-sn-tile {
+    .relay-sn-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+    .relay-sn-tile {
       width: 28px; height: 28px; border-radius: 8px;
       background: rgba(37,99,235,.10); color: #1D4ED8;
       display: flex; align-items: center; justify-content: center;
       flex-shrink: 0; font-weight: 700; font-size: 13px;
     }
-    .inboxpro-sn-title { flex: 1; font-weight: 600; font-size: 13px; }
-    .inboxpro-sn-close {
+    .relay-sn-title { flex: 1; font-weight: 600; font-size: 13px; }
+    .relay-sn-close {
       background: none; border: none; cursor: pointer; padding: 4px;
       border-radius: 6px; color: #A1A1AA;
       display: flex; align-items: center; justify-content: center;
       transition: all 140ms cubic-bezier(.25,1,.5,1);
     }
-    .inboxpro-sn-close:hover { background: #F4F4F5; color: #18181B; }
-    .inboxpro-sn-btn {
+    .relay-sn-close:hover { background: #F4F4F5; color: #18181B; }
+    .relay-sn-btn {
       width: 100%; padding: 8px 12px; background: #1D4ED8; color: white;
       border: none; border-radius: 8px; font-size: 12.5px; font-weight: 600;
       cursor: pointer; display: flex; align-items: center; justify-content: center;
       gap: 6px; transition: all 160ms cubic-bezier(.25,1,.5,1);
       font-family: inherit;
     }
-    .inboxpro-sn-btn:hover:not(:disabled) { background: #2563EB; transform: translateY(-1px); }
-    .inboxpro-sn-btn:active:not(:disabled) { transform: scale(.98); }
-    .inboxpro-sn-btn:disabled { cursor: not-allowed; opacity: .85; }
-    .inboxpro-sn-btn--running { animation: inboxpro-sn-pulse 1.8s ease-in-out infinite; }
-    .inboxpro-sn-btn--done { background: #16A34A; }
-    .inboxpro-sn-phase {
+    .relay-sn-btn:hover:not(:disabled) { background: #2563EB; transform: translateY(-1px); }
+    .relay-sn-btn:active:not(:disabled) { transform: scale(.98); }
+    .relay-sn-btn:disabled { cursor: not-allowed; opacity: .85; }
+    .relay-sn-btn--running { animation: relay-sn-pulse 1.8s ease-in-out infinite; }
+    .relay-sn-btn--done { background: #16A34A; }
+    .relay-sn-phase {
       margin-top: 8px; font-size: 11.5px; font-weight: 500; color: #52525B;
       letter-spacing: -.005em;
     }
-    .inboxpro-sn-progress {
+    .relay-sn-progress {
       margin-top: 2px; font-size: 11px; color: #71717A;
       font-family: ui-monospace, SFMono-Regular, monospace;
       min-height: 14px;
     }
-    .inboxpro-sn-spin { display: inline-flex; animation: inboxpro-sn-spin .9s linear infinite; }
+    .relay-sn-spin { display: inline-flex; animation: relay-sn-spin .9s linear infinite; }
   `;
   document.head.appendChild(style);
 
   const iconDownload = `<svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>`;
-  const iconSpin = `<span class="inboxpro-sn-spin"><svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg></span>`;
+  const iconSpin = `<span class="relay-sn-spin"><svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg></span>`;
   const iconCheck = `<svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
 
   function mountCard() {
-    if (document.getElementById('inboxpro-sn-card')) return;
+    if (document.getElementById('relay-sn-card')) return;
     const card = document.createElement('div');
-    card.id = 'inboxpro-sn-card';
+    card.id = 'relay-sn-card';
     card.innerHTML = `
-      <div class="inboxpro-sn-header">
-        <div class="inboxpro-sn-tile">i</div>
-        <div class="inboxpro-sn-title">InboxPro · Sales Nav sync</div>
-        <button class="inboxpro-sn-close" id="inboxpro-sn-close" title="Hide" aria-label="Hide">
+      <div class="relay-sn-header">
+        <div class="relay-sn-tile">i</div>
+        <div class="relay-sn-title">Relay · Sales Nav sync</div>
+        <button class="relay-sn-close" id="relay-sn-close" title="Hide" aria-label="Hide">
           <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
         </button>
       </div>
-      <button class="inboxpro-sn-btn" id="inboxpro-sn-btn">
-        <span id="inboxpro-sn-btn-icon">${iconDownload}</span>
-        <span id="inboxpro-sn-btn-label">Sync this SN inbox</span>
+      <button class="relay-sn-btn" id="relay-sn-btn">
+        <span id="relay-sn-btn-icon">${iconDownload}</span>
+        <span id="relay-sn-btn-label">Sync this SN inbox</span>
       </button>
-      <div class="inboxpro-sn-phase" id="inboxpro-sn-phase"></div>
-      <div class="inboxpro-sn-progress" id="inboxpro-sn-progress"></div>
+      <div class="relay-sn-phase" id="relay-sn-phase"></div>
+      <div class="relay-sn-progress" id="relay-sn-progress"></div>
     `;
     document.body.appendChild(card);
 
-    const btn = document.getElementById('inboxpro-sn-btn');
-    const btnLabel = document.getElementById('inboxpro-sn-btn-label');
-    const btnIcon = document.getElementById('inboxpro-sn-btn-icon');
-    const phaseEl = document.getElementById('inboxpro-sn-phase');
-    const progEl = document.getElementById('inboxpro-sn-progress');
-    const closeEl = document.getElementById('inboxpro-sn-close');
+    const btn = document.getElementById('relay-sn-btn');
+    const btnLabel = document.getElementById('relay-sn-btn-label');
+    const btnIcon = document.getElementById('relay-sn-btn-icon');
+    const phaseEl = document.getElementById('relay-sn-phase');
+    const progEl = document.getElementById('relay-sn-progress');
+    const closeEl = document.getElementById('relay-sn-close');
 
     let running = false;
     closeEl.addEventListener('click', () => { if (!running) card.style.display = 'none'; });
 
     function setUi(state, label, phase, progress) {
-      btn.className = 'inboxpro-sn-btn' + (state === 'running' ? ' inboxpro-sn-btn--running' : state === 'done' ? ' inboxpro-sn-btn--done' : '');
+      btn.className = 'relay-sn-btn' + (state === 'running' ? ' relay-sn-btn--running' : state === 'done' ? ' relay-sn-btn--done' : '');
       btnIcon.innerHTML = state === 'running' ? iconSpin : state === 'done' ? iconCheck : iconDownload;
       btnLabel.textContent = label;
       phaseEl.textContent = phase || '';
@@ -447,9 +447,9 @@
 
       // Update the progress line one final time when background work finishes
       // (button stays in 'done' state — user can keep working)
-      const card = document.getElementById('inboxpro-sn-card');
+      const card = document.getElementById('relay-sn-card');
       if (card) {
-        const p = document.getElementById('inboxpro-sn-progress');
+        const p = document.getElementById('relay-sn-progress');
         if (p) p.textContent = `${totals.profilesPatched} headlines added · ${totals.deepErrs} errors`;
       }
     });
@@ -460,10 +460,10 @@
   setInterval(() => {
     if (location.pathname === lastPath) return;
     lastPath = location.pathname;
-    if (isInboxPath() && !document.getElementById('inboxpro-sn-card')) {
+    if (isInboxPath() && !document.getElementById('relay-sn-card')) {
       mountCard();
-    } else if (!isInboxPath() && document.getElementById('inboxpro-sn-card')) {
-      const c = document.getElementById('inboxpro-sn-card');
+    } else if (!isInboxPath() && document.getElementById('relay-sn-card')) {
+      const c = document.getElementById('relay-sn-card');
       if (c) c.remove();
     }
   }, 1500);

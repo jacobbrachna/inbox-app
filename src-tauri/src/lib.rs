@@ -240,8 +240,15 @@ pub fn run() {
                     return;
                 }
                 if let Some(window) = handle.get_webview_window("main") {
+                    // Navigate the WebView from the data:URL loading page
+                    // to the live Next.js server. eval works here because
+                    // the data: URL is a normal page we control (not a
+                    // chrome-error page from a failed initial load).
                     let _ = window.eval("window.location.replace('http://localhost:3030/');");
-                    std::thread::sleep(Duration::from_millis(600));
+                    // Wait for the new page to render before revealing —
+                    // otherwise the user briefly sees the loading splash
+                    // mid-fade. 1.5s is enough for Next.js cold render.
+                    std::thread::sleep(Duration::from_millis(1500));
                     let _ = window.show();
                     let _ = window.set_focus();
                 }

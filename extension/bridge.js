@@ -1,56 +1,56 @@
-// Runs on localhost:3030 (InboxPro). Lets the page request a refresh from
+// Runs on localhost:3030 (Relay). Lets the page request a refresh from
 // the extension via window.postMessage — no externally_connectable / extension
 // ID juggling required.
 
-console.log('[InboxPro bridge] loaded on', location.href);
+console.log('[Relay bridge] loaded on', location.href);
 
 // Stamp a sentinel into the page DOM so the page can detect us synchronously.
 // Content scripts and page scripts share the DOM but not the JS context, so we
 // can't set window.__inboxproBridge directly — use a marker element instead.
 const marker = document.createElement('meta');
-marker.id = 'inboxpro-bridge-marker';
+marker.id = 'relay-bridge-marker';
 marker.setAttribute('content', 'ready');
 (document.head || document.documentElement).appendChild(marker);
 
 // Also announce via a postMessage so the page can react in real-time
-window.postMessage({ type: 'inboxpro-bridge-ready' }, '*');
+window.postMessage({ type: 'relay-bridge-ready' }, '*');
 window.dispatchEvent(new CustomEvent('inboxpro:bridge-ready'));
 
 window.addEventListener('message', (ev) => {
   if (ev.source !== window) return;
   if (!ev.data) return;
 
-  if (ev.data.type === 'inboxpro-refresh-request') {
+  if (ev.data.type === 'relay-refresh-request') {
     chrome.runtime.sendMessage({ action: 'refreshNow' }, (response) => {
-      window.postMessage({ type: 'inboxpro-refresh-result', response }, '*');
+      window.postMessage({ type: 'relay-refresh-result', response }, '*');
     });
   }
-  if (ev.data.type === 'inboxpro-inspect-thread') {
+  if (ev.data.type === 'relay-inspect-thread') {
     chrome.runtime.sendMessage(
       { action: 'inspectThread', urn: ev.data.urn },
       (response) => {
-        window.postMessage({ type: 'inboxpro-inspect-result', response }, '*');
+        window.postMessage({ type: 'relay-inspect-result', response }, '*');
       },
     );
   }
-  if (ev.data.type === 'inboxpro-refresh-thread') {
+  if (ev.data.type === 'relay-refresh-thread') {
     chrome.runtime.sendMessage(
       { action: 'refreshThread', urn: ev.data.urn },
       (response) => {
         window.postMessage({
-          type: 'inboxpro-refresh-thread-result',
+          type: 'relay-refresh-thread-result',
           urn: ev.data.urn,
           response,
         }, '*');
       },
     );
   }
-  if (ev.data.type === 'inboxpro-send-message') {
+  if (ev.data.type === 'relay-send-message') {
     chrome.runtime.sendMessage(
       { action: 'sendMessage', conversationUrn: ev.data.conversationUrn, body: ev.data.body },
       (response) => {
         window.postMessage({
-          type: 'inboxpro-send-result',
+          type: 'relay-send-result',
           requestId: ev.data.requestId,
           response,
         }, '*');
@@ -59,7 +59,7 @@ window.addEventListener('message', (ev) => {
   }
   // New-thread composer (LinkedIn DM or Sales Nav InMail) — routes the
   // request from new-thread-modal.tsx through to background.js.
-  if (ev.data.type === 'inboxpro-new-thread-request') {
+  if (ev.data.type === 'relay-new-thread-request') {
     chrome.runtime.sendMessage(
       {
         action: 'createNewThread',
@@ -71,44 +71,54 @@ window.addEventListener('message', (ev) => {
       },
       (response) => {
         window.postMessage({
-          type: 'inboxpro-new-thread-result',
+          type: 'relay-new-thread-result',
           requestId: ev.data.requestId,
           response,
         }, '*');
       },
     );
   }
-  if (ev.data.type === 'inboxpro-li-api-debug') {
+  if (ev.data.type === 'relay-li-api-debug') {
     chrome.runtime.sendMessage({ action: 'liApiDebugDump' }, (response) => {
-      window.postMessage({ type: 'inboxpro-li-api-debug-result', response }, '*');
+      window.postMessage({ type: 'relay-li-api-debug-result', response }, '*');
     });
   }
-  if (ev.data.type === 'inboxpro-li-initial-sync-api') {
+  if (ev.data.type === 'relay-li-initial-sync-api') {
     chrome.runtime.sendMessage(
       { action: 'liInitialSyncApi', deepFetch: ev.data.deepFetch !== false },
       (response) => {
-        window.postMessage({ type: 'inboxpro-li-initial-sync-api-result', response }, '*');
+        window.postMessage({ type: 'relay-li-initial-sync-api-result', response }, '*');
       },
     );
   }
-  if (ev.data.type === 'inboxpro-typing') {
+  if (ev.data.type === 'relay-typing') {
     // Fire-and-forget — don't wait for response, the UI doesn't need it
     chrome.runtime.sendMessage(
       { action: 'typing', conversationUrn: ev.data.conversationUrn },
       () => {},
     );
   }
-  if (ev.data.type === 'inboxpro-full-sync-request') {
-    chrome.runtime.sendMessage({ action: 'fullSync' }, (response) => {
-      window.postMessage({ type: 'inboxpro-full-sync-result', response }, '*');
-    });
+  if (ev.data.type === 'relay-full-sync-request') {
+    // Route to the API-based sync (linkedInInitialSyncApi) instead of the
+    // legacy scroll-based fullSync. The API path is faster, more reliable,
+    // and works without a visible LinkedIn tab. We map the response shape
+    // back to {count, messageCount} so existing UI listeners stay valid.
+    chrome.runtime.sendMessage(
+      { action: 'liInitialSyncApi', deepFetch: true },
+      (response) => {
+        const mapped = response?.ok
+          ? { ok: true, count: response.convs ?? 0, messageCount: response.msgs ?? 0, ...response }
+          : response;
+        window.postMessage({ type: 'relay-full-sync-result', response: mapped }, '*');
+      },
+    );
   }
-  if (ev.data.type === 'inboxpro-recover-request') {
+  if (ev.data.type === 'relay-recover-request') {
     chrome.runtime.sendMessage({ action: 'recoverMessages' }, (response) => {
-      window.postMessage({ type: 'inboxpro-recover-result', response }, '*');
+      window.postMessage({ type: 'relay-recover-result', response }, '*');
     });
   }
-  if (ev.data.type === 'inboxpro-enrich-request') {
+  if (ev.data.type === 'relay-enrich-request') {
     // Diagnostic — confirms bridge received the message from the page
     fetch('http://localhost:3030/api/sync-log', {
       method: 'POST',
@@ -140,32 +150,32 @@ window.addEventListener('message', (ev) => {
           }),
         }).catch(() => {});
         window.postMessage({
-          type: 'inboxpro-enrich-result',
+          type: 'relay-enrich-result',
           requestId: ev.data.requestId,
           response,
         }, '*');
       },
     );
   }
-  if (ev.data.type === 'inboxpro-harvest-connections-request') {
+  if (ev.data.type === 'relay-harvest-connections-request') {
     chrome.runtime.sendMessage({ action: 'harvestConnections' }, (response) => {
-      window.postMessage({ type: 'inboxpro-harvest-connections-result', response }, '*');
+      window.postMessage({ type: 'relay-harvest-connections-result', response }, '*');
     });
   }
-  if (ev.data.type === 'inboxpro-backfill-request') {
+  if (ev.data.type === 'relay-backfill-request') {
     chrome.runtime.sendMessage(
       { action: 'backfillCategory', category: ev.data.category || 'ARCHIVE' },
       (response) => {
-        window.postMessage({ type: 'inboxpro-backfill-result', response }, '*');
+        window.postMessage({ type: 'relay-backfill-result', response }, '*');
       },
     );
   }
-  if (ev.data.type === 'inboxpro-mirror-request') {
+  if (ev.data.type === 'relay-mirror-request') {
     chrome.runtime.sendMessage(
       { action: 'mirror', kind: ev.data.kind, urn: ev.data.urn, value: ev.data.value },
       (response) => {
         window.postMessage({
-          type: 'inboxpro-mirror-result',
+          type: 'relay-mirror-result',
           requestId: ev.data.requestId,
           response,
         }, '*');
@@ -181,9 +191,9 @@ function isContextValid() {
 }
 setInterval(() => {
   if (!isContextValid()) {
-    const m = document.getElementById('inboxpro-bridge-marker');
+    const m = document.getElementById('relay-bridge-marker');
     if (m) m.setAttribute('content', 'orphaned');
-    window.postMessage({ type: 'inboxpro-bridge-orphaned' }, '*');
+    window.postMessage({ type: 'relay-bridge-orphaned' }, '*');
   }
 }, 5000);
 
@@ -230,19 +240,19 @@ setInterval(snPoll, SN_POLL_INTERVAL_MS);
 // Forward background → page progress and completion events
 chrome.runtime.onMessage.addListener((message) => {
   if (message?.action === 'refresh-progress') {
-    window.postMessage({ type: 'inboxpro-refresh-progress', message: message.message }, '*');
+    window.postMessage({ type: 'relay-refresh-progress', message: message.message }, '*');
   }
   if (message?.action === 'refresh-complete') {
-    window.postMessage({ type: 'inboxpro-refresh-result', response: message.result }, '*');
+    window.postMessage({ type: 'relay-refresh-result', response: message.result }, '*');
   }
   if (message?.action === 'thread-updated') {
     window.postMessage({
-      type: 'inboxpro-thread-updated',
+      type: 'relay-thread-updated',
       urn: message.urn,
       count: message.count,
     }, '*');
   }
   if (message?.action === 'li-api-sync-progress') {
-    window.postMessage({ type: 'inboxpro-li-api-sync-progress', progress: message.progress }, '*');
+    window.postMessage({ type: 'relay-li-api-sync-progress', progress: message.progress }, '*');
   }
 });

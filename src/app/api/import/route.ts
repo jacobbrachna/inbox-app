@@ -547,7 +547,7 @@ export async function POST(req: NextRequest) {
     // (we passed transformed Conversation objects but want the raw alongside).
     // Also extract the source category (PRIMARY_INBOX / OTHER / ARCHIVE) which
     // the bridge poll tags onto each conv so we can mirror LinkedIn's archive
-    // state back to InboxPro.
+    // state back to Relay.
     const rawConvByUrn = new Map<string, unknown>();
     const categoryByConvUrn = new Map<string, string>();
     for (const rc of rawConvs) {

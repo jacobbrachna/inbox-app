@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# First-run installer for InboxPro on a fresh Mac. Invoked by the Tauri
+# First-run installer for Relay on a fresh Mac. Invoked by the Tauri
 # wrapper when ~/Documents/inbox-app doesn't exist yet. Mirrors the
-# Path-3 flow from the old GetInboxPro.app launcher: Homebrew → Node →
+# Path-3 flow from the old GetRelay.app launcher: Homebrew → Node →
 # git clone → npm install → prisma migrate → build.
 #
-# Writes /tmp/inboxpro-bootstrap-status (ok|fail|running) on each phase
+# Writes /tmp/relay-bootstrap-status (ok|fail|running) on each phase
 # so the Tauri Rust side can poll progress and surface errors.
 #
 # Usage:  bash bootstrap.sh
@@ -17,7 +17,7 @@ set -e
 
 INSTALL_DIR="$HOME/Documents/inbox-app"
 REPO_URL="https://github.com/jacobbrachna/inbox-app.git"
-STATUS=/tmp/inboxpro-bootstrap-status
+STATUS=/tmp/relay-bootstrap-status
 
 BLUE='\033[0;34m'; GREEN='\033[0;32m'; RED='\033[0;31m'; DIM='\033[2m'; NC='\033[0m'
 
@@ -30,7 +30,7 @@ echo "running" > "$STATUS"
 clear
 echo
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${BLUE}  InboxPro — first-run setup${NC}"
+echo -e "${BLUE}  Relay — first-run setup${NC}"
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo
 
@@ -72,7 +72,7 @@ ok "git ready"
 
 # ── Clone the repo ───────────────────────────────────────────────────
 if [ ! -d "$INSTALL_DIR/.git" ]; then
-  step "Downloading InboxPro to $INSTALL_DIR…"
+  step "Downloading Relay to $INSTALL_DIR…"
   mkdir -p "$(dirname "$INSTALL_DIR")"
   git clone "$REPO_URL" "$INSTALL_DIR" || die "git clone failed. Check internet connection."
 fi
@@ -103,7 +103,7 @@ echo "ok" > "$STATUS"
 
 echo
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}  ✓ InboxPro is set up. The app will continue automatically.${NC}"
+echo -e "${GREEN}  ✓ Relay is set up. The app will continue automatically.${NC}"
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo
 echo "ONE LAST STEP: load the Chrome extension."

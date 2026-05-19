@@ -27,10 +27,10 @@ export function ConversationList() {
   useEffect(() => {
     function onMessage(ev: MessageEvent) {
       if (ev.source !== window || !ev.data) return;
-      if (ev.data.type === 'inboxpro-refresh-progress') {
+      if (ev.data.type === 'relay-refresh-progress') {
         setRefreshMsg(ev.data.message);
       }
-      if (ev.data.type === 'inboxpro-refresh-result') {
+      if (ev.data.type === 'relay-refresh-result') {
         const r = ev.data.response;
         setRefreshing(false);
         if (r?.ok) {
@@ -54,7 +54,7 @@ export function ConversationList() {
     }
     setRefreshing(true);
     setRefreshMsg('Checking LinkedIn…');
-    window.postMessage({ type: 'inboxpro-refresh-request' }, '*');
+    window.postMessage({ type: 'relay-refresh-request' }, '*');
     setTimeout(() => {
       setRefreshing((r) => {
         if (r) setRefreshMsg('Still working… data will appear when sync finishes.');

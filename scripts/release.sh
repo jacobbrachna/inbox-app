@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Ship a new InboxPro version. Builds + signs + notarizes the .app +
+# Ship a new Relay version. Builds + signs + notarizes the .app +
 # .dmg + updater bundle, generates latest.json with the bundle signature,
 # uploads everything to GitHub Releases.
 #
@@ -50,15 +50,15 @@ if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
 fi
 
 step "Building v$VERSION (this takes a few minutes)…"
-npx tauri build > /tmp/inboxpro-release-build.log 2>&1 \
-  || { tail -40 /tmp/inboxpro-release-build.log; die "build failed."; }
+npx tauri build > /tmp/relay-release-build.log 2>&1 \
+  || { tail -40 /tmp/relay-release-build.log; die "build failed."; }
 ok "Built + notarized"
 
 # ── Locate artifacts ──────────────────────────────────────────────────
-APP="src-tauri/target/release/bundle/macos/InboxPro.app"
-DMG=$(ls src-tauri/target/release/bundle/dmg/InboxPro_*.dmg 2>/dev/null | head -1)
-UPDATER_TAR=$(ls src-tauri/target/release/bundle/macos/InboxPro.app.tar.gz 2>/dev/null | head -1)
-UPDATER_SIG=$(ls src-tauri/target/release/bundle/macos/InboxPro.app.tar.gz.sig 2>/dev/null | head -1)
+APP="src-tauri/target/release/bundle/macos/Relay.app"
+DMG=$(ls src-tauri/target/release/bundle/dmg/Relay_*.dmg 2>/dev/null | head -1)
+UPDATER_TAR=$(ls src-tauri/target/release/bundle/macos/Relay.app.tar.gz 2>/dev/null | head -1)
+UPDATER_SIG=$(ls src-tauri/target/release/bundle/macos/Relay.app.tar.gz.sig 2>/dev/null | head -1)
 
 [ -d "$APP" ]          || die "Missing $APP"
 [ -n "$DMG" ]          || die "Missing .dmg"
@@ -74,16 +74,16 @@ LATEST_JSON=/tmp/latest.json
 cat > "$LATEST_JSON" <<EOF
 {
   "version": "$VERSION",
-  "notes": "InboxPro $VERSION",
+  "notes": "Relay $VERSION",
   "pub_date": "$NOW",
   "platforms": {
     "darwin-aarch64": {
       "signature": "$SIG_CONTENT",
-      "url": "https://github.com/jacobbrachna/inbox-app/releases/download/$TAG/InboxPro.app.tar.gz"
+      "url": "https://github.com/jacobbrachna/inbox-app/releases/download/$TAG/Relay.app.tar.gz"
     },
     "darwin-x86_64": {
       "signature": "$SIG_CONTENT",
-      "url": "https://github.com/jacobbrachna/inbox-app/releases/download/$TAG/InboxPro.app.tar.gz"
+      "url": "https://github.com/jacobbrachna/inbox-app/releases/download/$TAG/Relay.app.tar.gz"
     }
   }
 }
@@ -97,7 +97,7 @@ step "Creating GitHub release $TAG…"
 if gh release view "$TAG" >/dev/null 2>&1; then
   echo -e "${DIM}  release $TAG already exists — uploading assets to it${NC}"
 else
-  gh release create "$TAG" --title "InboxPro $VERSION" --notes "Auto-generated release. See commits for details." \
+  gh release create "$TAG" --title "Relay $VERSION" --notes "Auto-generated release. See commits for details." \
     || die "gh release create failed."
 fi
 
@@ -108,7 +108,7 @@ ok "Uploaded"
 
 echo
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}  ✓ InboxPro $VERSION shipped${NC}"
+echo -e "${GREEN}  ✓ Relay $VERSION shipped${NC}"
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo
 echo "Users on older versions will see an Update available prompt on next launch."

@@ -7,7 +7,7 @@
 // User flow:
 //   1. User navigates to linkedin.com/mynetwork/invite-connect/connections/
 //   2. Floating button appears bottom-right
-//   3. Click → scrolls + collects every /in/<slug>/ link → POSTs to InboxPro
+//   3. Click → scrolls + collects every /in/<slug>/ link → POSTs to Relay
 //   4. Shows live count + final summary
 
 (() => {
@@ -19,16 +19,16 @@
   // --- Inject styles + keyframes once ---
   const style = document.createElement('style');
   style.textContent = `
-    @keyframes inboxpro-fade-in {
+    @keyframes relay-fade-in {
       from { opacity: 0; transform: translateY(8px); }
       to   { opacity: 1; transform: translateY(0); }
     }
-    @keyframes inboxpro-pulse {
+    @keyframes relay-pulse {
       0%, 100% { box-shadow: 0 8px 24px rgba(37, 99, 235, 0.24), 0 0 0 0 rgba(37, 99, 235, 0.30); }
       50%      { box-shadow: 0 8px 24px rgba(37, 99, 235, 0.18), 0 0 0 6px rgba(37, 99, 235, 0); }
     }
-    @keyframes inboxpro-spin { to { transform: rotate(360deg); } }
-    #inboxpro-harvest-card {
+    @keyframes relay-spin { to { transform: rotate(360deg); } }
+    #relay-harvest-card {
       position: fixed;
       bottom: 24px;
       right: 24px;
@@ -43,26 +43,26 @@
       box-shadow: 0 12px 28px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.06);
       font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', system-ui, sans-serif;
       font-size: 13px;
-      animation: inboxpro-fade-in 280ms cubic-bezier(0.25, 1, 0.5, 1);
+      animation: relay-fade-in 280ms cubic-bezier(0.25, 1, 0.5, 1);
       -webkit-font-smoothing: antialiased;
     }
     @media (prefers-color-scheme: dark) {
-      #inboxpro-harvest-card {
+      #relay-harvest-card {
         background: #161616;
         color: #FAFAFA;
         border-color: #262626;
       }
-      .inboxpro-harvest-progress { color: #A1A1A1 !important; }
-      .inboxpro-harvest-close { color: #71717A !important; }
-      .inboxpro-harvest-close:hover { background: #1E1E1E !important; color: #FAFAFA !important; }
+      .relay-harvest-progress { color: #A1A1A1 !important; }
+      .relay-harvest-close { color: #71717A !important; }
+      .relay-harvest-close:hover { background: #1E1E1E !important; color: #FAFAFA !important; }
     }
-    .inboxpro-harvest-header {
+    .relay-harvest-header {
       display: flex;
       align-items: center;
       gap: 10px;
       margin-bottom: 8px;
     }
-    .inboxpro-harvest-tile {
+    .relay-harvest-tile {
       width: 28px;
       height: 28px;
       border-radius: 8px;
@@ -76,13 +76,13 @@
       font-size: 13px;
       letter-spacing: -0.02em;
     }
-    .inboxpro-harvest-title {
+    .relay-harvest-title {
       flex: 1;
       font-weight: 600;
       font-size: 13px;
       letter-spacing: -0.005em;
     }
-    .inboxpro-harvest-close {
+    .relay-harvest-close {
       background: none;
       border: none;
       cursor: pointer;
@@ -95,8 +95,8 @@
       transition: all 140ms cubic-bezier(0.25, 1, 0.5, 1);
       font-family: inherit;
     }
-    .inboxpro-harvest-close:hover { background: #F4F4F5; color: #18181B; }
-    .inboxpro-harvest-btn {
+    .relay-harvest-close:hover { background: #F4F4F5; color: #18181B; }
+    .relay-harvest-btn {
       width: 100%;
       padding: 8px 12px;
       background: #1D4ED8;
@@ -114,15 +114,15 @@
       font-family: inherit;
       letter-spacing: -0.005em;
     }
-    .inboxpro-harvest-btn:hover:not(:disabled) {
+    .relay-harvest-btn:hover:not(:disabled) {
       background: #2563EB;
       transform: translateY(-1px);
     }
-    .inboxpro-harvest-btn:active:not(:disabled) { transform: scale(0.98); }
-    .inboxpro-harvest-btn:disabled { cursor: not-allowed; opacity: 0.85; }
-    .inboxpro-harvest-btn--running { animation: inboxpro-pulse 1.8s ease-in-out infinite; }
-    .inboxpro-harvest-btn--done { background: #16A34A; }
-    .inboxpro-harvest-progress {
+    .relay-harvest-btn:active:not(:disabled) { transform: scale(0.98); }
+    .relay-harvest-btn:disabled { cursor: not-allowed; opacity: 0.85; }
+    .relay-harvest-btn--running { animation: relay-pulse 1.8s ease-in-out infinite; }
+    .relay-harvest-btn--done { background: #16A34A; }
+    .relay-harvest-progress {
       margin-top: 8px;
       font-size: 11px;
       color: #71717A;
@@ -130,7 +130,7 @@
       letter-spacing: -0.01em;
       min-height: 14px;
     }
-    .inboxpro-harvest-warn {
+    .relay-harvest-warn {
       margin-top: 8px;
       padding: 6px 10px;
       border-radius: 8px;
@@ -144,29 +144,29 @@
       gap: 6px;
     }
     @media (prefers-color-scheme: dark) {
-      .inboxpro-harvest-warn {
+      .relay-harvest-warn {
         background: rgba(217, 119, 6, 0.14);
         border-color: rgba(217, 119, 6, 0.30);
         color: #FCD34D;
       }
     }
-    .inboxpro-harvest-spin {
+    .relay-harvest-spin {
       display: inline-flex;
-      animation: inboxpro-spin 0.9s linear infinite;
+      animation: relay-spin 0.9s linear infinite;
     }
   `;
   document.head.appendChild(style);
 
   // --- UI ---
   const card = document.createElement('div');
-  card.id = 'inboxpro-harvest-card';
+  card.id = 'relay-harvest-card';
 
   const iconIdle = `<svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
     <polyline points="7 10 12 15 17 10"></polyline>
     <line x1="12" y1="15" x2="12" y2="3"></line>
   </svg>`;
-  const iconSpinner = `<span class="inboxpro-harvest-spin"><svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
+  const iconSpinner = `<span class="relay-harvest-spin"><svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
     <path d="M21 12a9 9 0 1 1-6.219-8.56"></path>
   </svg></span>`;
   const iconCheck = `<svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
@@ -174,22 +174,22 @@
   </svg>`;
 
   card.innerHTML = `
-    <div class="inboxpro-harvest-header">
-      <div class="inboxpro-harvest-tile">i</div>
-      <div class="inboxpro-harvest-title">InboxPro · Harvest URLs</div>
-      <button class="inboxpro-harvest-close" id="inboxpro-harvest-close" title="Hide" aria-label="Hide">
+    <div class="relay-harvest-header">
+      <div class="relay-harvest-tile">i</div>
+      <div class="relay-harvest-title">Relay · Harvest URLs</div>
+      <button class="relay-harvest-close" id="relay-harvest-close" title="Hide" aria-label="Hide">
         <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
           <line x1="18" y1="6" x2="6" y2="18"></line>
           <line x1="6" y1="6" x2="18" y2="18"></line>
         </svg>
       </button>
     </div>
-    <button class="inboxpro-harvest-btn" id="inboxpro-harvest-btn">
-      <span id="inboxpro-harvest-btn-icon">${iconIdle}</span>
-      <span id="inboxpro-harvest-btn-label">Scroll &amp; harvest connections</span>
+    <button class="relay-harvest-btn" id="relay-harvest-btn">
+      <span id="relay-harvest-btn-icon">${iconIdle}</span>
+      <span id="relay-harvest-btn-label">Scroll &amp; harvest connections</span>
     </button>
-    <div class="inboxpro-harvest-progress" id="inboxpro-harvest-progress"></div>
-    <div class="inboxpro-harvest-warn">
+    <div class="relay-harvest-progress" id="relay-harvest-progress"></div>
+    <div class="relay-harvest-warn">
       <svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" style="flex-shrink:0">
         <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
         <line x1="12" y1="9" x2="12" y2="13"></line>
@@ -200,11 +200,11 @@
   `;
 
   document.body.appendChild(card);
-  const btn = document.getElementById('inboxpro-harvest-btn');
-  const btnLabel = document.getElementById('inboxpro-harvest-btn-label');
-  const btnIcon = document.getElementById('inboxpro-harvest-btn-icon');
-  const progressEl = document.getElementById('inboxpro-harvest-progress');
-  const closeEl = document.getElementById('inboxpro-harvest-close');
+  const btn = document.getElementById('relay-harvest-btn');
+  const btnLabel = document.getElementById('relay-harvest-btn-label');
+  const btnIcon = document.getElementById('relay-harvest-btn-icon');
+  const progressEl = document.getElementById('relay-harvest-progress');
+  const closeEl = document.getElementById('relay-harvest-close');
 
   closeEl.addEventListener('click', () => {
     if (running) return;
@@ -212,7 +212,7 @@
   });
 
   function setState(state, label, progress) {
-    btn.className = 'inboxpro-harvest-btn' + (state === 'running' ? ' inboxpro-harvest-btn--running' : state === 'done' ? ' inboxpro-harvest-btn--done' : '');
+    btn.className = 'relay-harvest-btn' + (state === 'running' ? ' relay-harvest-btn--running' : state === 'done' ? ' relay-harvest-btn--done' : '');
     btnIcon.innerHTML = state === 'running' ? iconSpinner : state === 'done' ? iconCheck : iconIdle;
     btnLabel.textContent = label;
     if (progress != null) progressEl.textContent = progress;
@@ -427,7 +427,7 @@
     }
     harvest();
 
-    setState('running', 'Sending to InboxPro…', `${results.size} links`);
+    setState('running', 'Sending to Relay…', `${results.size} links`);
 
     const items = Array.from(results.entries()).map(([url, v]) => ({
       url,

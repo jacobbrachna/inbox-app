@@ -18,10 +18,10 @@
   // ── Styles (mirrors sn-sync-button) ───────────────────────────────────────
   const style = document.createElement('style');
   style.textContent = `
-    @keyframes inboxpro-li-fade-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-    @keyframes inboxpro-li-pulse { 0%,100% { box-shadow: 0 8px 24px rgba(37,99,235,.24), 0 0 0 0 rgba(37,99,235,.30); } 50% { box-shadow: 0 8px 24px rgba(37,99,235,.18), 0 0 0 6px rgba(37,99,235,0); } }
-    @keyframes inboxpro-li-spin { to { transform: rotate(360deg); } }
-    #inboxpro-li-card {
+    @keyframes relay-li-fade-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes relay-li-pulse { 0%,100% { box-shadow: 0 8px 24px rgba(37,99,235,.24), 0 0 0 0 rgba(37,99,235,.30); } 50% { box-shadow: 0 8px 24px rgba(37,99,235,.18), 0 0 0 6px rgba(37,99,235,0); } }
+    @keyframes relay-li-spin { to { transform: rotate(360deg); } }
+    #relay-li-card {
       position: fixed; bottom: 24px; right: 24px; z-index: 99999;
       background: #fff; color: #18181B;
       border: 1px solid #E5E5E5; border-radius: 14px;
@@ -29,87 +29,87 @@
       box-shadow: 0 12px 28px rgba(0,0,0,.12), 0 2px 6px rgba(0,0,0,.06);
       font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
       font-size: 13px;
-      animation: inboxpro-li-fade-in 280ms cubic-bezier(.25,1,.5,1);
+      animation: relay-li-fade-in 280ms cubic-bezier(.25,1,.5,1);
       -webkit-font-smoothing: antialiased;
     }
     @media (prefers-color-scheme: dark) {
-      #inboxpro-li-card { background: #161616; color: #FAFAFA; border-color: #262626; }
-      .inboxpro-li-progress { color: #A1A1A1 !important; }
-      .inboxpro-li-phase { color: #71717A !important; }
-      .inboxpro-li-close { color: #71717A !important; }
-      .inboxpro-li-close:hover { background: #1E1E1E !important; color: #FAFAFA !important; }
+      #relay-li-card { background: #161616; color: #FAFAFA; border-color: #262626; }
+      .relay-li-progress { color: #A1A1A1 !important; }
+      .relay-li-phase { color: #71717A !important; }
+      .relay-li-close { color: #71717A !important; }
+      .relay-li-close:hover { background: #1E1E1E !important; color: #FAFAFA !important; }
     }
-    .inboxpro-li-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
-    .inboxpro-li-tile {
+    .relay-li-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+    .relay-li-tile {
       width: 28px; height: 28px; border-radius: 8px;
       background: rgba(37,99,235,.10); color: #1D4ED8;
       display: flex; align-items: center; justify-content: center;
       flex-shrink: 0; font-weight: 700; font-size: 13px;
     }
-    .inboxpro-li-title { flex: 1; font-weight: 600; font-size: 13px; }
-    .inboxpro-li-close {
+    .relay-li-title { flex: 1; font-weight: 600; font-size: 13px; }
+    .relay-li-close {
       background: none; border: none; cursor: pointer; padding: 4px;
       border-radius: 6px; color: #A1A1AA;
       display: flex; align-items: center; justify-content: center;
       transition: all 140ms cubic-bezier(.25,1,.5,1);
     }
-    .inboxpro-li-close:hover { background: #F4F4F5; color: #18181B; }
-    .inboxpro-li-btn {
+    .relay-li-close:hover { background: #F4F4F5; color: #18181B; }
+    .relay-li-btn {
       width: 100%; padding: 8px 12px; background: #1D4ED8; color: white;
       border: none; border-radius: 8px; font-size: 12.5px; font-weight: 600;
       cursor: pointer; display: flex; align-items: center; justify-content: center;
       gap: 6px; transition: all 160ms cubic-bezier(.25,1,.5,1);
       font-family: inherit;
     }
-    .inboxpro-li-btn:hover:not(:disabled) { background: #2563EB; transform: translateY(-1px); }
-    .inboxpro-li-btn:active:not(:disabled) { transform: scale(.98); }
-    .inboxpro-li-btn:disabled { cursor: not-allowed; opacity: .85; }
-    .inboxpro-li-btn--running { animation: inboxpro-li-pulse 1.8s ease-in-out infinite; }
-    .inboxpro-li-btn--done { background: #16A34A; }
-    .inboxpro-li-phase {
+    .relay-li-btn:hover:not(:disabled) { background: #2563EB; transform: translateY(-1px); }
+    .relay-li-btn:active:not(:disabled) { transform: scale(.98); }
+    .relay-li-btn:disabled { cursor: not-allowed; opacity: .85; }
+    .relay-li-btn--running { animation: relay-li-pulse 1.8s ease-in-out infinite; }
+    .relay-li-btn--done { background: #16A34A; }
+    .relay-li-phase {
       margin-top: 8px; font-size: 11.5px; font-weight: 500; color: #52525B;
       letter-spacing: -.005em;
     }
-    .inboxpro-li-progress {
+    .relay-li-progress {
       margin-top: 2px; font-size: 11px; color: #71717A;
       font-family: ui-monospace, SFMono-Regular, monospace;
       min-height: 14px;
     }
-    .inboxpro-li-spin { display: inline-flex; animation: inboxpro-li-spin .9s linear infinite; }
+    .relay-li-spin { display: inline-flex; animation: relay-li-spin .9s linear infinite; }
   `;
   document.head.appendChild(style);
 
   const iconDownload = `<svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>`;
-  const iconSpin = `<span class="inboxpro-li-spin"><svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg></span>`;
+  const iconSpin = `<span class="relay-li-spin"><svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg></span>`;
   const iconCheck = `<svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
 
   function mountCard() {
-    if (document.getElementById('inboxpro-li-card')) return;
+    if (document.getElementById('relay-li-card')) return;
     const card = document.createElement('div');
-    card.id = 'inboxpro-li-card';
+    card.id = 'relay-li-card';
     card.innerHTML = `
-      <div class="inboxpro-li-header">
-        <div class="inboxpro-li-tile">i</div>
-        <div class="inboxpro-li-title">InboxPro · LinkedIn sync</div>
-        <button class="inboxpro-li-close" id="inboxpro-li-close" title="Hide" aria-label="Hide">
+      <div class="relay-li-header">
+        <div class="relay-li-tile">i</div>
+        <div class="relay-li-title">Relay · LinkedIn sync</div>
+        <button class="relay-li-close" id="relay-li-close" title="Hide" aria-label="Hide">
           <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
         </button>
       </div>
-      <button class="inboxpro-li-btn" id="inboxpro-li-btn">
-        <span id="inboxpro-li-btn-icon">${iconDownload}</span>
-        <span id="inboxpro-li-btn-label">Sync this LinkedIn inbox</span>
+      <button class="relay-li-btn" id="relay-li-btn">
+        <span id="relay-li-btn-icon">${iconDownload}</span>
+        <span id="relay-li-btn-label">Sync this LinkedIn inbox</span>
       </button>
-      <div class="inboxpro-li-phase" id="inboxpro-li-phase"></div>
-      <div class="inboxpro-li-progress" id="inboxpro-li-progress"></div>
+      <div class="relay-li-phase" id="relay-li-phase"></div>
+      <div class="relay-li-progress" id="relay-li-progress"></div>
     `;
     document.body.appendChild(card);
 
-    const btn = document.getElementById('inboxpro-li-btn');
-    const btnLabel = document.getElementById('inboxpro-li-btn-label');
-    const btnIcon = document.getElementById('inboxpro-li-btn-icon');
-    const phaseEl = document.getElementById('inboxpro-li-phase');
-    const progEl = document.getElementById('inboxpro-li-progress');
-    const closeEl = document.getElementById('inboxpro-li-close');
+    const btn = document.getElementById('relay-li-btn');
+    const btnLabel = document.getElementById('relay-li-btn-label');
+    const btnIcon = document.getElementById('relay-li-btn-icon');
+    const phaseEl = document.getElementById('relay-li-phase');
+    const progEl = document.getElementById('relay-li-progress');
+    const closeEl = document.getElementById('relay-li-close');
 
     let running = false;
     let pollInterval = null;
@@ -117,9 +117,9 @@
     closeEl.addEventListener('click', () => { if (!running) card.style.display = 'none'; });
 
     function setUi(state, label, phase, progress) {
-      btn.className = 'inboxpro-li-btn' +
-        (state === 'running' ? ' inboxpro-li-btn--running' :
-         state === 'done'    ? ' inboxpro-li-btn--done' : '');
+      btn.className = 'relay-li-btn' +
+        (state === 'running' ? ' relay-li-btn--running' :
+         state === 'done'    ? ' relay-li-btn--done' : '');
       btnIcon.innerHTML = state === 'running' ? iconSpin : state === 'done' ? iconCheck : iconDownload;
       btnLabel.textContent = label;
       phaseEl.textContent = phase || '';

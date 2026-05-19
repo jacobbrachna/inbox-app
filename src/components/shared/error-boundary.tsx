@@ -49,7 +49,7 @@ export class AppErrorBoundary extends Component<Props, State> {
             Something went wrong
           </h1>
           <p className="text-[12.5px] text-[var(--color-text-secondary)] mt-2 leading-relaxed">
-            InboxPro hit an unexpected error. Your data is safe — try reloading.
+            Relay hit an unexpected error. Your data is safe — try reloading.
           </p>
           <pre className="mt-4 p-3 rounded-lg bg-[var(--color-surface-2)] text-[11px] text-[var(--color-text-tertiary)] text-left overflow-auto max-h-32 mono">
             {error.message}

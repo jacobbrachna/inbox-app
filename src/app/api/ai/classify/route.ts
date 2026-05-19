@@ -3,7 +3,7 @@ import { prisma } from '@/lib/db';
 import { CORS, optionsResponse } from '@/lib/api-utils';
 import { requireAnthropic, MODELS } from '@/lib/ai';
 import { resolveFuzzyDate } from '@/lib/fuzzy-date';
-import { loadAIManagedLabels, applyExclusiveGroups } from '@/lib/ai-labels';
+import { loadAIManagedLabels, applyExclusiveGroups, seedAILabels } from '@/lib/ai-labels';
 import { createNotification } from '@/lib/notify';
 import { safeParseArray } from '@/lib/api-utils';
 
@@ -56,6 +56,12 @@ export async function POST(req: NextRequest) {
 
     const state = await prisma.appState.findUnique({ where: { id: 1 } });
     const myName = state?.profileName ?? 'me';
+
+    // Idempotently ensure the AI-managed label seed exists. Fresh installs
+    // ship without these (only the 5 manual seed labels), so without this
+    // step the classifier sees an empty label palette and returns `labels: []`
+    // for every conversation. Running every call is cheap (Prisma upserts).
+    await seedAILabels();
 
     // Load the AI-managed labels (system seeds + user-created with descriptions)
     const aiLabels = await loadAIManagedLabels();

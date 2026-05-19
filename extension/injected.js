@@ -300,5 +300,5 @@
     window.WebSocket.prototype = OrigWS.prototype;
   }
 
-  console.log('[InboxPro] fetch + WebSocket hooks installed');
+  console.log('[Relay] fetch + WebSocket hooks installed');
 })();

@@ -1,13 +1,250 @@
 const INBOXPRO_URL = 'http://localhost:3030';
+const INBOXPRO_WS_URL = 'ws://127.0.0.1:3030/ws';
 
-// Broadcast a message to all open InboxPro tabs.
-async function broadcastToInboxPro(message) {
+// ── WS connection to the Electron broker ───────────────────────────────────
+// Replaces the old localhost-only content-script bridge. The Electron main
+// process runs a WS server on port 3030 (path /ws) that routes messages
+// between the app's renderer and this background service worker. The bridge
+// content script (extension/bridge.js) is dead on app:// pages.
+let ipproWs = null;
+let ipproWsBackoff = 500;
+
+function ipproWsSend(payload) {
   try {
-    const tabs = await chrome.tabs.query({ url: `${INBOXPRO_URL}/*` });
-    for (const t of tabs) {
-      if (t.id != null) chrome.tabs.sendMessage(t.id, message).catch(() => {});
+    if (ipproWs && ipproWs.readyState === 1) {
+      ipproWs.send(JSON.stringify(payload));
     }
-  } catch (e) {}
+  } catch {}
+}
+
+// MV3 service workers idle out after ~30s of inactivity. WebSocket activity
+// counts as activity (Chrome 116+) so a periodic ping keeps both the SW and
+// the connection alive while the app is open. We also let the WS reconnect
+// itself if the SW does get torn down (top-level connectIpproWs runs again
+// on every SW start).
+let ipproWsKeepalive = null;
+function startKeepalive() {
+  stopKeepalive();
+  ipproWsKeepalive = setInterval(() => {
+    if (ipproWs && ipproWs.readyState === 1) {
+      try { ipproWs.send(JSON.stringify({ type: '__ping' })); } catch {}
+    }
+  }, 20_000);
+}
+function stopKeepalive() {
+  if (ipproWsKeepalive) { clearInterval(ipproWsKeepalive); ipproWsKeepalive = null; }
+}
+
+function connectIpproWs() {
+  try {
+    ipproWs = new WebSocket(INBOXPRO_WS_URL);
+  } catch {
+    setTimeout(connectIpproWs, ipproWsBackoff = Math.min(ipproWsBackoff * 2, 5000));
+    return;
+  }
+  ipproWs.addEventListener('open', () => {
+    ipproWsBackoff = 500;
+    ipproWsSend({ type: '__hello', role: 'extension' });
+    startKeepalive();
+  });
+  ipproWs.addEventListener('close', () => {
+    stopKeepalive();
+    setTimeout(connectIpproWs, ipproWsBackoff = Math.min(ipproWsBackoff * 2, 5000));
+  });
+  ipproWs.addEventListener('error', () => { try { ipproWs.close(); } catch {} });
+  ipproWs.addEventListener('message', (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch { return; }
+    dispatchIpproWsMessage(msg);
+  });
+}
+
+// Map from "{type: 'relay-X-request', ...}" messages (originally sent via
+// window.postMessage to the bridge content script) to the existing action
+// implementations. Each handler receives the raw message, runs the work,
+// and emits a result event on the WS so the renderer's listeners see the
+// same `{type, response, requestId?}` shape bridge.js used to produce.
+async function dispatchIpproWsMessage(msg) {
+  if (!msg || typeof msg.type !== 'string') return;
+  const emit = (resultType, response) => ipproWsSend({ type: resultType, response, requestId: msg.requestId });
+
+  try {
+    switch (msg.type) {
+      case 'relay-refresh-request': {
+        // Silent polls (from the 10s in-app poll loop) shouldn't fire ANY
+        // UI-facing event — bridge.js suppressed both refresh-complete and
+        // refresh-result. The poll relies on thread-updated broadcasts
+        // (sent only when something actually changed) to surface updates.
+        const silent = !!msg.silent;
+        const result = await backgroundSync({ broadcastProgress: !silent });
+        if (!silent) {
+          broadcastToRelay({ action: 'refresh-complete', result });
+          emit('relay-refresh-result', result);
+        }
+        return;
+      }
+      case 'relay-sn-refresh-request': {
+        // Same silent-by-default policy as the LinkedIn poll above.
+        try { await snBackgroundSync(); } catch (e) { syncLog('snRefreshNow.err', { err: e?.message }); }
+        return;
+      }
+      case 'relay-full-sync-request':
+      case 'relay-li-initial-sync-api': {
+        const isLegacyType = msg.type === 'relay-full-sync-request';
+        const result = await linkedInInitialSyncApi({
+          deepFetch: msg.deepFetch !== false,
+          onProgress: (p) => {
+            broadcastToRelay({ action: 'li-api-sync-progress', progress: p });
+            let m = '';
+            if (p.phase === 'inbox') m = `Fetching inbox… ${p.convs} conversation${p.convs === 1 ? '' : 's'}`;
+            else if (p.phase === 'messages') m = `Fetching messages… ${p.done}/${p.total}`;
+            if (m) broadcastToRelay({ action: 'refresh-progress', message: m });
+          },
+        });
+        const mapped = result?.ok
+          ? { ok: true, count: result.convs ?? 0, messageCount: result.msgs ?? 0, ...result }
+          : result;
+        broadcastToRelay({ action: 'refresh-complete', result: mapped });
+        emit(isLegacyType ? 'relay-full-sync-result' : 'relay-li-initial-sync-api-result', isLegacyType ? mapped : result);
+        return;
+      }
+      case 'relay-recover-request': {
+        const result = await recoverMissingMessages({
+          onProgress: (m) => broadcastToRelay({ action: 'refresh-progress', message: m }),
+        });
+        emit('relay-recover-result', result);
+        return;
+      }
+      case 'relay-send-message': {
+        const isSn = typeof msg.conversationUrn === 'string' && msg.conversationUrn.startsWith('sn:');
+        const result = isSn
+          ? await sendSnMessage({ threadId: msg.conversationUrn, body: msg.body })
+          : await sendLinkedInMessage({ conversationUrn: msg.conversationUrn, body: msg.body });
+        emit('relay-send-result', result);
+        return;
+      }
+      case 'relay-typing': {
+        const urn = msg.conversationUrn;
+        if (typeof urn === 'string' && urn.startsWith('sn:')) return; // SN has no typing
+        await sendLinkedInTyping({ conversationUrn: urn });
+        return; // fire-and-forget
+      }
+      case 'relay-refresh-thread': {
+        // Re-run the same logic the chrome.runtime handler does (line ~2450)
+        // — fetch one thread's messages from voyager and push to /api/import.
+        const auth = await getLinkedInAuth();
+        if (!auth) { emit('relay-refresh-thread-result', { ok: false, reason: 'not-logged-in' }); return; }
+        const urn = msg.urn;
+        const url = `https://www.linkedin.com/voyager/api/voyagerMessagingGraphQL/graphql?queryId=${MESSAGES_QUERY_ID}&variables=(conversationUrn:${encodeURN(urn)},count:50)`;
+        try {
+          const r = await fetch(url, { headers: liHeaders(auth.csrf), credentials: 'include' });
+          if (!r.ok) { emit('relay-refresh-thread-result', { ok: false, reason: `HTTP ${r.status}` }); return; }
+          const j = await r.json();
+          const harvested = harvestPayload(j);
+          if (harvested.messages.length === 0) {
+            emit('relay-refresh-thread-result', { ok: true, count: 0 });
+            return;
+          }
+          let storedProfileUrn = '';
+          try {
+            const sr = await fetch(`${INBOXPRO_URL}/api/state`);
+            if (sr.ok) storedProfileUrn = (await sr.json()).myProfileUrn || '';
+          } catch {}
+          await pushToApp({
+            conversations: harvested.conversations,
+            messages: { [urn]: harvested.messages },
+            entities: harvested.entities,
+            myProfileUrn: storedProfileUrn,
+          });
+          broadcastToRelay({ action: 'thread-updated', urn, count: harvested.messages.length });
+          emit('relay-refresh-thread-result', { ok: true, count: harvested.messages.length });
+        } catch (e) {
+          emit('relay-refresh-thread-result', { ok: false, reason: e?.message || 'fetch threw' });
+        }
+        return;
+      }
+      case 'relay-inspect-thread': {
+        const auth = await getLinkedInAuth();
+        if (!auth) { emit('relay-inspect-result', { ok: false, reason: 'not-logged-in' }); return; }
+        const url = `https://www.linkedin.com/voyager/api/voyagerMessagingGraphQL/graphql?queryId=${MESSAGES_QUERY_ID}&variables=(conversationUrn:${encodeURN(msg.urn)},count:50)`;
+        try {
+          const r = await fetch(url, { headers: liHeaders(auth.csrf), credentials: 'include' });
+          emit('relay-inspect-result', { ok: true, status: r.status, raw: await r.text() });
+        } catch (e) {
+          emit('relay-inspect-result', { ok: false, reason: e?.message });
+        }
+        return;
+      }
+      case 'relay-new-thread-request': {
+        let result;
+        if (msg.channel === 'linkedin') {
+          result = await createLinkedInThread({ recipientUrn: msg.recipientUrn, body: msg.body });
+        } else if (msg.channel === 'sn') {
+          result = await createSnInMail({ recipientUrn: msg.recipientUrn, subject: msg.subject, body: msg.body });
+        } else {
+          result = { ok: false, reason: `unknown channel: ${msg.channel}` };
+        }
+        emit('relay-new-thread-result', result);
+        return;
+      }
+      case 'relay-enrich-request': {
+        const result = await enrichLinkedInProfile({
+          profileUrn: msg.profileUrn,
+          profileUrl: msg.profileUrl,
+        });
+        emit('relay-enrich-result', result);
+        return;
+      }
+      case 'relay-harvest-connections-request': {
+        const result = await harvestConnectionUrls((m) =>
+          broadcastToRelay({ action: 'refresh-progress', message: m }),
+        );
+        emit('relay-harvest-connections-result', result);
+        return;
+      }
+      case 'relay-backfill-request': {
+        const result = await backfillCategory(msg.category || 'ARCHIVE');
+        emit('relay-backfill-result', result);
+        return;
+      }
+      case 'relay-mirror-request': {
+        const isSn = typeof msg.urn === 'string' && msg.urn.startsWith('sn:');
+        const result = isSn
+          ? await mirrorToSn({ kind: msg.kind, urn: msg.urn })
+          : await mirrorToLinkedIn({ kind: msg.kind, urn: msg.urn, value: msg.value });
+        emit('relay-mirror-result', result);
+        return;
+      }
+      case 'relay-li-api-debug': {
+        const result = await debugLinkedInApi();
+        emit('relay-li-api-debug-result', result);
+        return;
+      }
+      default:
+        // Unknown message type — let it pass without warning.
+        return;
+    }
+  } catch (e) {
+    syncLog('wsDispatch.err', { type: msg.type, err: e?.message });
+  }
+}
+
+connectIpproWs();
+
+// Broadcast a message to the renderer. Originally targeted localhost:3030
+// browser tabs via chrome.tabs.sendMessage, but the app now lives on app://
+// where Chrome can't inject content scripts. Route via the WS broker —
+// every message goes through the renderer-side ws-bridge that re-emits it
+// as a window.postMessage so existing listeners keep working.
+//
+// Each `{action: X, ...}` becomes `{type: relay-X, ...}` to match the
+// shape bridge.js used to produce.
+async function broadcastToRelay(message) {
+  if (!message || typeof message.action !== 'string') return;
+  // The renderer-side bridge filters incoming messages to those whose type
+  // starts with `relay-`. We translate the action keyword into that form.
+  const { action, ...rest } = message;
+  ipproWsSend({ type: `relay-${action}`, ...rest });
 }
 
 // Fire-and-forget diagnostic log to the app — lets me see what's happening
@@ -26,7 +263,7 @@ async function pushToApp(payload) {
     body = JSON.stringify(payload);
   } catch (e) {
     const reason = `JSON.stringify failed: ${e?.message || 'unknown'}`;
-    console.error('[InboxPro] push failed:', reason);
+    console.error('[Relay] push failed:', reason);
     syncLog('pushToApp.fail', { reason, payloadKeys: Object.keys(payload || {}) });
     return { ok: false, reason };
   }
@@ -45,7 +282,7 @@ async function pushToApp(payload) {
     const text = await r.text().catch(() => '');
     if (!r.ok) {
       const reason = `HTTP ${r.status}: ${text.slice(0, 300)}`;
-      console.error('[InboxPro] push failed:', reason);
+      console.error('[Relay] push failed:', reason);
       syncLog('pushToApp.fail', { reason, status: r.status });
       return { ok: false, reason, status: r.status };
     }
@@ -53,7 +290,7 @@ async function pushToApp(payload) {
     return { ok: true };
   } catch (e) {
     const reason = `fetch threw: ${e?.message || 'unknown'}`;
-    console.error('[InboxPro] push failed:', reason);
+    console.error('[Relay] push failed:', reason);
     syncLog('pushToApp.fail', { reason });
     return { ok: false, reason };
   }
@@ -94,7 +331,7 @@ async function showNotification({ title, body, convId }) {
       setTimeout(() => notificationToConv.delete(notifId), 10 * 60 * 1000);
     }
   } catch (e) {
-    console.error('[InboxPro] notify failed:', e);
+    console.error('[Relay] notify failed:', e);
   }
 }
 
@@ -118,7 +355,7 @@ chrome.notifications.onClicked.addListener((notifId) => {
 // ── Background sync: fetch directly from LinkedIn using user cookies ─────────
 // This runs from the service worker context, so it works even when the user has
 // no LinkedIn tab open. Triggered by chrome.alarms every 5 min, or on-demand
-// via the bridge content script on localhost:3030 (Refresh button in InboxPro).
+// via the bridge content script on localhost:3030 (Refresh button in Relay).
 
 const MESSAGES_QUERY_ID = 'messengerMessages.5846eeb71c981f11e0134cb6626cc314';
 const CONVERSATIONS_QUERY_ID = 'messengerConversations.9501074288a12f3ae9e3c7ea243bccbf';
@@ -254,7 +491,7 @@ async function createLinkedInThread({ recipientUrn, body }) {
 
 // ── Create a NEW Sales Navigator message thread ─────────────────────────────
 // SN's createMessage action accepts `recipients` array when no threadId is
-// given — SN auto-creates the thread. Subject is optional: InboxPro targets
+// given — SN auto-creates the thread. Subject is optional: Relay targets
 // messaging existing connections (where SN treats sends as regular DMs),
 // so we omit it unless the caller explicitly passes one.
 async function createSnInMail({ recipientUrn, subject, body }) {
@@ -460,13 +697,11 @@ async function linkedInInitialSyncApi({
   const auth = await getLinkedInAuth();
   if (!auth) return { ok: false, reason: 'not-logged-in' };
 
-  // Need myProfileUrn for the mailboxUrn in the query
-  let myProfileUrn = '';
-  try {
-    const sr = await fetch(`${INBOXPRO_URL}/api/state`);
-    if (sr.ok) myProfileUrn = (await sr.json()).myProfileUrn || '';
-  } catch {}
-  if (!myProfileUrn) return { ok: false, reason: 'no-myProfileUrn — run regular sync once first' };
+  // Need myProfileUrn for the mailboxUrn in the query. ensureMyProfileUrn()
+  // bootstraps it from /voyager/api/me on first run instead of demanding the
+  // user trigger a "regular sync" first.
+  const myProfileUrn = await ensureMyProfileUrn();
+  if (!myProfileUrn) return { ok: false, reason: 'no-myProfileUrn — could not bootstrap from /me' };
 
   const headers = liHeaders(auth.csrf);
   // INBOX = PRIMARY_INBOX + OTHER + ARCHIVE. Some accounts have an empty OTHER —
@@ -902,7 +1137,7 @@ async function enrichLinkedInProfile({ profileUrn, profileUrl, sourceTabId }) {
       captureCompleteResolvers.delete(tab.id);
       try { await chrome.tabs.remove(tab.id); } catch {}
     }
-    // Restore focus to whichever tab kicked this off (usually the InboxPro
+    // Restore focus to whichever tab kicked this off (usually the Relay
     // tab). Without this, Chrome moves focus to the last-active tab in the
     // window — which might be unrelated. Best-effort: swallow errors so a
     // missing source tab doesn't bubble up.
@@ -1110,6 +1345,114 @@ function liHeaders(csrf) {
   };
 }
 
+// Fetch the current user's profile URN directly from LinkedIn's /me
+// endpoint. Used to bootstrap AppState.myProfileUrn on a fresh install
+// — both API sync paths need this value, but the value used to only be
+// persisted as a byproduct of the legacy scroll-sync. /voyager/api/me
+// is what LinkedIn's own UI hits on every page load.
+async function fetchMyProfileUrn() {
+  const auth = await getLinkedInAuth();
+  if (!auth) return { ok: false, reason: 'not-logged-in' };
+  try {
+    const r = await fetch('https://www.linkedin.com/voyager/api/me', {
+      headers: liHeaders(auth.csrf),
+      credentials: 'include',
+    });
+    if (!r.ok) return { ok: false, reason: `me-fetch ${r.status}` };
+    const j = await r.json();
+    // LinkedIn ships several URN shapes in /me. We want the fsd_profile
+    // (member ID) URN since that's what messaging APIs use. Try them
+    // in order of reliability:
+    //   1. data.*miniProfile  → "urn:li:fs_miniProfile:ACoAA..."
+    //   2. included[].entityUrn matching fs_miniProfile
+    //   3. data.plainId → numeric ID (no good — we need the alpha ID)
+    let raw =
+      j?.data?.['*miniProfile'] ||
+      j?.miniProfile?.entityUrn ||
+      null;
+    if (!raw && Array.isArray(j?.included)) {
+      const mp = j.included.find((x) => typeof x?.entityUrn === 'string'
+        && x.entityUrn.startsWith('urn:li:fs_miniProfile:'));
+      if (mp) raw = mp.entityUrn;
+    }
+    if (!raw) return { ok: false, reason: 'no-miniProfile-urn' };
+    const id = raw.split(':').pop();
+    if (!/^[A-Za-z0-9_-]+$/.test(id)) return { ok: false, reason: 'bad-id-shape' };
+    const myProfileUrn = `urn:li:fsd_profile:${id}`;
+    // Also try to grab the display name for AppState.profileName.
+    let profileName = '';
+    const included = Array.isArray(j?.included) ? j.included : [];
+    const mp = included.find((x) => x?.entityUrn === raw);
+    if (mp && (mp.firstName || mp.lastName)) {
+      profileName = [mp.firstName, mp.lastName].filter(Boolean).join(' ').trim();
+    }
+    return { ok: true, myProfileUrn, profileName };
+  } catch (e) {
+    return { ok: false, reason: e?.message || 'me-fetch threw' };
+  }
+}
+
+// Resolve AppState.myProfileUrn for the next sync. Three cases:
+//   1. First run: stored URN is empty → bootstrap from /me, persist, return.
+//   2. Steady state: stored URN matches the live /me URN → return it.
+//   3. Account switch: stored URN ≠ live /me URN → broadcast a mismatch
+//      event, refuse to proceed (return null). The UI surfaces a banner
+//      letting the user resync as the new account or sign back into the
+//      original one.
+async function ensureMyProfileUrn() {
+  // Stored state
+  let storedUrn = '', storedName = '';
+  try {
+    const sr = await fetch(`${INBOXPRO_URL}/api/state`);
+    if (sr.ok) {
+      const d = await sr.json();
+      storedUrn = d.myProfileUrn || '';
+      storedName = d.profileName || '';
+    }
+  } catch {}
+
+  // Live URN from LinkedIn /me
+  const fresh = await fetchMyProfileUrn();
+
+  if (!fresh.ok) {
+    // /me failed (not logged in, transient error). Fall back to stored if
+    // we have one — sync may still work; the alarm will retry shortly.
+    if (storedUrn) return storedUrn;
+    syncLog('ensureMyProfileUrn.noFreshNoStored', { reason: fresh.reason });
+    return null;
+  }
+
+  if (storedUrn && storedUrn !== fresh.myProfileUrn) {
+    syncLog('account.mismatch', {
+      storedUrn, storedName,
+      freshUrn: fresh.myProfileUrn, freshName: fresh.profileName,
+    });
+    broadcastToRelay({
+      action: 'account-mismatch',
+      storedName: storedName || 'a previous LinkedIn account',
+      storedUrn,
+      currentName: fresh.profileName || 'this LinkedIn account',
+      currentUrn: fresh.myProfileUrn,
+    });
+    return null;
+  }
+
+  // Bootstrap on first run
+  if (!storedUrn) {
+    try {
+      await fetch(`${INBOXPRO_URL}/api/profile-urn`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ myProfileUrn: fresh.myProfileUrn, profileName: fresh.profileName }),
+      });
+    } catch (e) {
+      syncLog('bootstrapUrn.saveFail', { err: e?.message });
+    }
+    syncLog('bootstrapUrn.ok', { urn: fresh.myProfileUrn, name: fresh.profileName || '' });
+  }
+  return fresh.myProfileUrn;
+}
+
 // Walk a JSON tree, returning all conversation + message objects found
 function harvestPayload(json) {
   const conversations = [];
@@ -1170,8 +1513,11 @@ async function backgroundSync({ broadcastProgress = false } = {}) {
   }
   syncLog('backgroundSync.state', { knownCount: Object.keys(knownByUrn).length, hasMyUrn: !!myProfileUrn });
   if (!myProfileUrn) {
-    syncLog('backgroundSync.fail', { reason: 'no-profile-urn' });
-    return { ok: false, reason: 'no-profile-urn — do a manual sync first' };
+    myProfileUrn = await ensureMyProfileUrn();
+    if (!myProfileUrn) {
+      syncLog('backgroundSync.fail', { reason: 'no-profile-urn' });
+      return { ok: false, reason: 'no-profile-urn — could not bootstrap from /me' };
+    }
   }
 
   // LinkedIn's messengerConversationsByCategoryQuery REQUIRES lastUpdatedBefore.
@@ -1232,7 +1578,7 @@ async function backgroundSync({ broadcastProgress = false } = {}) {
       if (!c.entityUrn || seenConvUrns.has(c.entityUrn)) continue;
       seenConvUrns.add(c.entityUrn);
       // Tag with source category so the import route can mirror LinkedIn's
-      // archive state back to InboxPro (was previously one-way only).
+      // archive state back to Relay (was previously one-way only).
       conversations.push({ ...c, _sourceCategory: res.cat });
     }
     Object.assign(entities, harvested.entities);
@@ -1259,7 +1605,7 @@ async function backgroundSync({ broadcastProgress = false } = {}) {
   syncLog('backgroundSync.changed', { changedCount: changed.length });
 
   if (broadcastProgress) {
-    broadcastToInboxPro({
+    broadcastToRelay({
       action: 'refresh-progress',
       message: `Checking ${conversations.length} conversations · ${changed.length} new/changed`,
     });
@@ -1300,12 +1646,16 @@ async function backgroundSync({ broadcastProgress = false } = {}) {
       myProfileUrn,
     });
     for (const c of changed) {
-      broadcastToInboxPro({ action: 'thread-updated', urn: c.entityUrn, count: 0 });
+      broadcastToRelay({ action: 'thread-updated', urn: c.entityUrn, count: 0 });
     }
     syncLog('backgroundSync.pushed', {
       convs: changed.length,
       msgs: Object.values(messagesByConv).reduce((a, b) => a + b.length, 0),
     });
+    // Resolve any "LinkedIn User" placeholders this sync may have produced.
+    // Fire-and-forget so we don't delay the sync result — the placeholder
+    // fix lands within a second or two of the sync completing.
+    resolvePlaceholderUrns().catch((e) => syncLog('urnResolve.afterSync.fail', { err: e?.message }));
   }
 
   return { ok: true, newConvs: changed.length, newMsgs: Object.values(messagesByConv).reduce((a, b) => a + b.length, 0) };
@@ -1723,12 +2073,8 @@ async function backfillCategory(category, onProgress) {
   const auth = await getLinkedInAuth();
   if (!auth) return { ok: false, reason: 'not-logged-in' };
 
-  let myProfileUrn = '';
-  try {
-    const sr = await fetch(`${INBOXPRO_URL}/api/state`);
-    if (sr.ok) myProfileUrn = (await sr.json()).myProfileUrn || '';
-  } catch {}
-  if (!myProfileUrn) return { ok: false, reason: 'no-profile-urn — run a full sync first' };
+  const myProfileUrn = await ensureMyProfileUrn();
+  if (!myProfileUrn) return { ok: false, reason: 'no-profile-urn — could not bootstrap from /me' };
 
   let cursor = Date.now() + 60_000;
   let pageNum = 0;
@@ -1829,21 +2175,21 @@ async function backfillCategory(category, onProgress) {
 }
 
 // ── Alarm: closed-tab background sync ────────────────────────────────────────
-// Fires every 5 min even with all InboxPro/LinkedIn tabs closed, so the inbox
-// stays fresh when you wake your laptop or have Chrome open without InboxPro.
+// Fires every 5 min even with all Relay/LinkedIn tabs closed, so the inbox
+// stays fresh when you wake your laptop or have Chrome open without Relay.
 // chrome.alarms persists across browser restarts; the listener must be
 // re-registered each time the service worker starts (i.e. top-level in
 // background.js — that's why this is at module scope, not inside onInstalled).
-const ALARM_NAME = 'inboxpro-background-sync';
+const ALARM_NAME = 'relay-background-sync';
 // Profile-enrichment alarm: periodically opens 1-3 contact profiles in hidden
 // tabs to silently capture role/company via the existing profile-capture.js
 // content script. Throttled to ~human pace.
-const ENRICH_ALARM = 'inboxpro-profile-enrich';
+const ENRICH_ALARM = 'relay-profile-enrich';
 // Sales Navigator inbox refresh — hits SN's API directly, no SN tab needed.
-const SN_ALARM = 'inboxpro-sn-sync';
+const SN_ALARM = 'relay-sn-sync';
 // Daily parser-health check — alerts the user when LinkedIn's response
 // shape drifts under our scrapers (success rate cratering on any source).
-const PARSER_HEALTH_ALARM = 'inboxpro-parser-health';
+const PARSER_HEALTH_ALARM = 'relay-parser-health';
 const PARSER_HEALTH_PERIOD_MIN = 24 * 60; // 1 day
 chrome.runtime.onInstalled.addListener(() => {
   chrome.alarms.create(ALARM_NAME, { periodInMinutes: 5 });
@@ -1857,6 +2203,66 @@ chrome.runtime.onStartup.addListener(() => {
   chrome.alarms.create(SN_ALARM, { delayInMinutes: 0.1, periodInMinutes: 3 });
   chrome.alarms.create(PARSER_HEALTH_ALARM, { delayInMinutes: 5, periodInMinutes: PARSER_HEALTH_PERIOD_MIN });
 });
+// Resolves "LinkedIn User" placeholder convs by hitting voyager's identity
+// dash endpoint per participant URN. Cheap (single API call per conv, no
+// hidden-tab scrape) and idempotent — repeatable on a cadence.
+async function resolvePlaceholderUrns() {
+  const auth = await getLinkedInAuth();
+  if (!auth) return;
+  let items = [];
+  try {
+    const r = await fetch(`${INBOXPRO_URL}/api/conversations/needs-urn-resolve?limit=10`);
+    if (!r.ok) return;
+    items = (await r.json()).items || [];
+  } catch { return; }
+  if (items.length === 0) {
+    syncLog('urnResolve.idle', {});
+    return;
+  }
+  syncLog('urnResolve.batch', { count: items.length });
+
+  const conversations = [];
+  for (const { id: convId, participantUrn } of items) {
+    try {
+      // /voyager/api/identity/dash/profiles?q=memberIdentity&memberIdentity=<URN>
+      // returns the full profile including firstName/lastName/headline +
+      // publicIdentifier (for the profileUrl). The URN's last segment is the
+      // memberIdentity hash voyager expects.
+      const url = `https://www.linkedin.com/voyager/api/identity/dash/profiles?q=memberIdentity&memberIdentity=${encodeURN(participantUrn)}`;
+      const r = await fetch(url, { headers: liHeaders(auth.csrf), credentials: 'include' });
+      if (!r.ok) { syncLog('urnResolve.fail', { status: r.status, urn: participantUrn.slice(-20) }); continue; }
+      const json = await r.json();
+      const profile = (json?.elements && json.elements[0]) || json?.included?.find?.((x) => x?.entityUrn === participantUrn) || null;
+      if (!profile) { syncLog('urnResolve.noProfile', { urn: participantUrn.slice(-20) }); continue; }
+      const first = profile.firstName || '';
+      const last = profile.lastName || '';
+      const name = `${first} ${last}`.trim();
+      if (!name) continue;
+      const slug = profile.publicIdentifier || '';
+      const profileUrl = slug ? `https://www.linkedin.com/in/${slug}/` : undefined;
+      // Push to /api/import — the import handler has the right upsert logic
+      // and will overwrite the "LinkedIn User" placeholder with the real name.
+      conversations.push({
+        entityUrn: convId,
+        participants: [{ id: participantUrn, name, profileUrl, headline: profile.headline || undefined }],
+      });
+      await new Promise((res) => setTimeout(res, 200)); // gentle throttle
+    } catch (e) {
+      syncLog('urnResolve.err', { urn: participantUrn.slice(-20), err: e?.message });
+    }
+  }
+  if (conversations.length === 0) return;
+  try {
+    let myProfileUrn = '';
+    const sr = await fetch(`${INBOXPRO_URL}/api/state`);
+    if (sr.ok) myProfileUrn = (await sr.json()).myProfileUrn || '';
+    await pushToApp({ conversations, messages: {}, entities: {}, myProfileUrn });
+    syncLog('urnResolve.done', { resolved: conversations.length });
+  } catch (e) {
+    syncLog('urnResolve.pushFail', { err: e?.message });
+  }
+}
+
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === ALARM_NAME) {
     syncLog('alarm.fire', { name: alarm.name });
@@ -1867,6 +2273,11 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     syncLog('alarm.fire', { name: alarm.name });
     processProfileEnrichmentQueue().catch((e) => {
       syncLog('autoEnrich.fail', { err: e?.message });
+    });
+    // URN resolution shares this cadence — cheap, runs alongside the
+    // tab-based enrichment loop.
+    resolvePlaceholderUrns().catch((e) => {
+      syncLog('urnResolve.fail', { err: e?.message });
     });
   } else if (alarm.name === SN_ALARM) {
     syncLog('alarm.fire', { name: alarm.name });
@@ -1916,7 +2327,7 @@ async function checkParserHealth() {
     if (typeof last === 'number' && now - last < refireMs) continue;
     const pct = Math.round(s.rate * 100);
     showNotification({
-      title: 'InboxPro: parser health degraded',
+      title: 'Relay: parser health degraded',
       body: `${s.source} success rate ${pct}% over the last 24h. LinkedIn may have changed its shape — check Diagnostics → Parser health.`,
     });
     lastFiredMap[s.source] = now;
@@ -2048,7 +2459,7 @@ async function processProfileEnrichmentQueue() {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Content scripts ask this at page load to decide whether to auto-capture
-  // (app-initiated tabs) or just show the "Import to InboxPro" floating
+  // (app-initiated tabs) or just show the "Import to Relay" floating
   // button + skip silent POSTs.
   if (message.action === 'is-app-initiated') {
     const tabId = sender.tab?.id;
@@ -2073,7 +2484,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         await openApp();
         sendResponse({ success: true });
       } else {
-        sendResponse({ error: 'Could not reach localhost:3030. Is InboxPro running?' });
+        sendResponse({ error: 'Could not reach localhost:3030. Is Relay running?' });
       }
     })();
     return true;
@@ -2093,7 +2504,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // Find or open a LinkedIn messaging tab, then trigger the content script's runSync.
         let [liTab] = await chrome.tabs.query({ url: '*://www.linkedin.com/messaging*' });
         if (!liTab) {
-          broadcastToInboxPro({ action: 'refresh-progress', message: 'Opening LinkedIn messaging tab…' });
+          broadcastToRelay({ action: 'refresh-progress', message: 'Opening LinkedIn messaging tab…' });
           liTab = await chrome.tabs.create({ url: 'https://www.linkedin.com/messaging', active: false });
           await new Promise((resolve) => {
             const listener = (tabId, info) => {
@@ -2106,7 +2517,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           });
         }
         await chrome.scripting.executeScript({ target: { tabId: liTab.id }, files: ['content.js'] }).catch(() => {});
-        broadcastToInboxPro({ action: 'refresh-progress', message: 'Scrolling and capturing inbox…' });
+        broadcastToRelay({ action: 'refresh-progress', message: 'Scrolling and capturing inbox…' });
         const result = await chrome.tabs.sendMessage(liTab.id, { action: 'sync' });
         if (result?.error) {
           sendResponse({ ok: false, reason: result.error });
@@ -2148,7 +2559,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // Silent polls already trigger thread-updated broadcasts when something
       // actually changes — no need for a noisy "Up to date" UI flash.
       if (!silent) {
-        broadcastToInboxPro({ action: 'refresh-complete', result });
+        broadcastToRelay({ action: 'refresh-complete', result });
       }
       sendResponse(result);
     })();
@@ -2166,9 +2577,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const result = await linkedInInitialSyncApi({
         deepFetch: message.deepFetch !== false,
         onProgress: (p) => {
-          broadcastToInboxPro({ action: 'li-api-sync-progress', progress: p });
+          // Original event (kept for the on-LinkedIn floating card)
+          broadcastToRelay({ action: 'li-api-sync-progress', progress: p });
+          // Friendly progress text on the same channel the app already
+          // listens to ("relay-refresh-progress"). Lets the in-app
+          // Refresh / onboarding UI show live status during API sync.
+          let msg = '';
+          if (p.phase === 'inbox') {
+            msg = `Fetching inbox… ${p.convs} conversation${p.convs === 1 ? '' : 's'}`;
+          } else if (p.phase === 'messages') {
+            msg = `Fetching messages… ${p.done}/${p.total}`;
+          }
+          if (msg) broadcastToRelay({ action: 'refresh-progress', message: msg });
         },
       });
+      // Surface completion on the same channel so any UI listening to
+      // "relay-refresh-result" gets the result too.
+      const mapped = result?.ok
+        ? { ok: true, count: result.convs ?? 0, messageCount: result.msgs ?? 0, ...result }
+        : result;
+      broadcastToRelay({ action: 'refresh-complete', result: mapped });
       sendResponse(result);
     })();
     return true;
@@ -2182,10 +2610,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message.action === 'recoverMessages') {
     (async () => {
-      broadcastToInboxPro({ action: 'refresh-progress', message: 'Extension received recover request, starting…' });
+      broadcastToRelay({ action: 'refresh-progress', message: 'Extension received recover request, starting…' });
       const result = await recoverMissingMessages({
         onProgress: (msg) => {
-          broadcastToInboxPro({ action: 'refresh-progress', message: msg });
+          broadcastToRelay({ action: 'refresh-progress', message: msg });
         },
       });
       sendResponse(result);
@@ -2243,7 +2671,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           entities: harvested.entities,
           myProfileUrn: storedProfileUrn,
         });
-        broadcastToInboxPro({
+        broadcastToRelay({
           action: 'thread-updated',
           urn,
           count: harvested.messages.length,
@@ -2305,7 +2733,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'harvestConnections') {
     (async () => {
       const result = await harvestConnectionUrls((msg) => {
-        broadcastToInboxPro({ action: 'refresh-progress', message: msg });
+        broadcastToRelay({ action: 'refresh-progress', message: msg });
       });
       sendResponse(result);
     })();
@@ -2314,7 +2742,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'backfillCategory') {
     (async () => {
       const result = await backfillCategory(message.category || 'ARCHIVE', (msg) => {
-        broadcastToInboxPro({ action: 'refresh-progress', message: msg });
+        broadcastToRelay({ action: 'refresh-progress', message: msg });
       });
       sendResponse(result);
     })();
@@ -2330,7 +2758,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         profileUrn: message.profileUrn,
         profileUrl: message.profileUrl,
         // Tab that requested the enrichment — restore focus to it after
-        // the capture tab closes so the user lands back on InboxPro.
+        // the capture tab closes so the user lands back on Relay.
         sourceTabId: sender?.tab?.id,
       });
       sendResponse(result);
@@ -2403,10 +2831,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   // Realtime push: content.js captured new data from a LinkedIn fetch and just
-  // POSTed it to /api/import. We just need to tell every InboxPro tab so it
+  // POSTed it to /api/import. We just need to tell every Relay tab so it
   // refreshes the affected thread.
   if (message.action === 'broadcastThreadUpdated') {
-    broadcastToInboxPro({
+    broadcastToRelay({
       action: 'thread-updated',
       urn: message.urn,
       count: message.count || 0,

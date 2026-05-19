@@ -108,7 +108,7 @@ export function YourContext() {
     const requestId = `me-enrich-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     function onResult(ev: MessageEvent) {
       if (ev.source !== window || !ev.data) return;
-      if (ev.data.type !== 'inboxpro-enrich-result' || ev.data.requestId !== requestId) return;
+      if (ev.data.type !== 'relay-enrich-result' || ev.data.requestId !== requestId) return;
       window.removeEventListener('message', onResult);
       const resp = ev.data.response;
       if (resp?.ok) {
@@ -127,7 +127,7 @@ export function YourContext() {
       }
     }
     window.addEventListener('message', onResult);
-    window.postMessage({ type: 'inboxpro-enrich-request', requestId, profileUrl }, '*');
+    window.postMessage({ type: 'relay-enrich-request', requestId, profileUrl }, '*');
 
     // Safety net — same timeout as contact enrichment.
     setTimeout(() => {

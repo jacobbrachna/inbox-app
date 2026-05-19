@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build a clean InboxPro zip for teammates. Excludes per-machine state
+# Build a clean Relay zip for teammates. Excludes per-machine state
 # (dev.db, logs, node_modules, build artifacts) so the archive only contains
 # what every teammate needs.
 #
@@ -24,7 +24,7 @@ mkdir -p "$DIST_DIR"
 rm -f "$ZIP_PATH"
 
 # Ensure the installer is executable before we zip (zip preserves mode bits)
-chmod +x "Install InboxPro.command" 2>/dev/null || true
+chmod +x "Install Relay.command" 2>/dev/null || true
 chmod +x setup.sh scripts/restart-prod.sh 2>/dev/null || true
 
 echo -e "${BLUE}▸${NC} Building ${ZIP_NAME}…"
@@ -59,7 +59,7 @@ echo "Share this zip with your teammate."
 echo
 echo "Their workflow:"
 echo "  1. Unzip the file"
-echo "  2. Double-click 'Install InboxPro.command' inside the unzipped folder"
+echo "  2. Double-click 'Install Relay.command' inside the unzipped folder"
 echo "  3. Follow the on-screen instructions to load the Chrome extension"
 echo
 echo "Total time: ~5 min if they have Node, ~10 min if not (auto-installs via brew)."
