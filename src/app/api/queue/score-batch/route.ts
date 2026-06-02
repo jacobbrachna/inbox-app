@@ -10,7 +10,7 @@ import type { Participant } from '@/types';
 // Result is cached on the Conversation row so we don't re-score on every Queue
 // page-load. Re-score only when a conv has new activity since last score.
 
-const PROMPT = `You score conversations for an SDR's "outbound queue" — which conversations should they work on TODAY.
+const BASE_PROMPT = `You score conversations for an SDR's "outbound queue" — which conversations should they work on TODAY.
 
 For the given conversation, output JSON with:
 - priority (0-100): how urgent is it that the SDR responds/follows up?
@@ -19,35 +19,49 @@ For the given conversation, output JSON with:
   - 50-69: friendly reply, light engagement, worth nudging
   - 30-49: cold or formulaic reply, low intent
   - 0-29: not actionable (auto-responder, "not interested", off-topic)
-- signal (max 60 chars): one short phrase describing WHY it ranks here.
+- icpFit (0-100): how well does the contact fit the SDR's Ideal Customer Profile?
+  Score from the contact's role/headline/company against the ICP brief below.
+  Be generous on close matches — "Director of Security" still fits "Head of Security",
+  a fintech still fits "B2B SaaS" if the role aligns. Reserve <40 for true mismatches.
+  If no ICP brief is provided, return 50 (neutral).
+  - 80-100: strong fit (exact title family + relevant industry/size)
+  - 60-79: close fit (similar title OR same industry, missing one dimension)
+  - 40-59: partial fit (related role or adjacent industry)
+  - 0-39: clear mismatch
+- signal (max 60 chars): one short phrase describing WHY priority ranks where it does.
   Examples: "Asked about pricing", "Mentioned Q1 launch", "Replied with interest",
   "Auto-reply only", "Said not interested".
 
 Output ONLY a JSON object, no surrounding text. Example:
-{"priority":85,"signal":"Asked when we can meet"}`;
+{"priority":85,"icpFit":78,"signal":"Asked when we can meet"}`;
 
 interface ScoreResult {
   priority: number;
+  icpFit: number;
   signal: string;
 }
 
+function clamp(n: number) { return Math.max(0, Math.min(100, Math.round(n))); }
+
 function safeJsonParse(s: string): ScoreResult | null {
-  try {
-    const j = JSON.parse(s);
-    if (typeof j?.priority === 'number' && typeof j?.signal === 'string') {
-      return { priority: Math.max(0, Math.min(100, Math.round(j.priority))), signal: j.signal.slice(0, 80) };
-    }
-  } catch {}
-  // Try to extract JSON from surrounding text
-  const m = s.match(/\{[^}]*\}/);
-  if (m) {
+  const tryParse = (raw: string): ScoreResult | null => {
     try {
-      const j = JSON.parse(m[0]);
+      const j = JSON.parse(raw);
       if (typeof j?.priority === 'number' && typeof j?.signal === 'string') {
-        return { priority: Math.max(0, Math.min(100, Math.round(j.priority))), signal: j.signal.slice(0, 80) };
+        return {
+          priority: clamp(j.priority),
+          // icpFit is new — default to 50 if older model output omits it.
+          icpFit: typeof j.icpFit === 'number' ? clamp(j.icpFit) : 50,
+          signal: j.signal.slice(0, 80),
+        };
       }
     } catch {}
-  }
+    return null;
+  };
+  const direct = tryParse(s);
+  if (direct) return direct;
+  const m = s.match(/\{[^}]*\}/);
+  if (m) return tryParse(m[0]);
   return null;
 }
 
@@ -66,6 +80,19 @@ export async function POST(req: NextRequest) {
       );
     }
     const client = clientNullable; // non-null reference for use inside worker closures
+
+    // Pull state once per batch. If a structured icpDefinition exists, the
+    // deterministic scorer in /api/icp/rescore owns icpFit — this batch only
+    // computes priority + signal (urgency). Otherwise we fall back to the
+    // free-text ICP brief and have Claude estimate icpFit too.
+    const state = await prisma.appState.findUnique({ where: { id: 1 } });
+    const hasStructuredIcp = !!state?.icpDefinition;
+    const icpBrief = state?.idealCustomerProfile?.trim() || '';
+    const SYSTEM = hasStructuredIcp
+      ? `${BASE_PROMPT}\n\nICP fit is handled separately — return icpFit:50 (it will be overridden).`
+      : icpBrief
+        ? `${BASE_PROMPT}\n\nICP brief (the SDR's ideal customer):\n${icpBrief}`
+        : `${BASE_PROMPT}\n\nICP brief: (none provided — return icpFit:50)`;
 
     // Cap batch size for safety
     const ids = convIds.slice(0, 50);
@@ -101,8 +128,8 @@ export async function POST(req: NextRequest) {
         try {
           const resp = await client.messages.create({
             model: 'claude-haiku-4-5-20251001',
-            max_tokens: 80,
-            system: PROMPT,
+            max_tokens: 100,
+            system: SYSTEM,
             messages: [{ role: 'user', content: userMsg }],
           });
           const text = resp.content
@@ -111,22 +138,24 @@ export async function POST(req: NextRequest) {
             .trim();
           const parsed = safeJsonParse(text);
           if (parsed) {
-            await prisma.conversation.update({
-              where: { id: c.id },
-              data: {
-                aiPriorityScore: parsed.priority,
-                aiPrioritySignal: parsed.signal,
-                aiPriorityAt: new Date(),
-              },
-            });
+            // Don't overwrite a deterministic icpFit when a structured ICP
+            // definition is in play — that path owns the column.
+            const data: Record<string, unknown> = {
+              aiPriorityScore: parsed.priority,
+              aiPrioritySignal: parsed.signal,
+              aiPriorityAt: new Date(),
+            };
+            if (!hasStructuredIcp) data.aiIcpFit = parsed.icpFit;
+            await prisma.conversation.update({ where: { id: c.id }, data });
             results[c.id] = parsed;
             scored++;
           } else {
-            results[c.id] = { priority: 0, signal: '', error: 'parse_failed' };
+            results[c.id] = { priority: 0, icpFit: 50, signal: '', error: 'parse_failed' };
           }
         } catch (e) {
           results[c.id] = {
             priority: 0,
+            icpFit: 50,
             signal: '',
             error: e instanceof Error ? e.message : 'unknown',
           };

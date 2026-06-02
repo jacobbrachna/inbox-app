@@ -5,6 +5,7 @@ import { cn } from '@/lib/cn';
 import { storage } from '@/lib/storage';
 import { useStore } from '@/store';
 import { formatDistanceToNowStrict, format } from 'date-fns';
+import { ZoominfoPanel } from './zoominfo-panel';
 export function ContactDetails() {
   const { activeConversationId, conversations, messages, labels, updateConversation, loadFromServer } = useStore();
   const [showLabelPicker, setShowLabelPicker] = useState(false);
@@ -412,6 +413,9 @@ export function ContactDetails() {
           </div>
         </div>
       )}
+
+      {/* ZoomInfo signals — only renders when ZI is connected in Settings */}
+      <ZoominfoPanel conversationId={convo.id} />
 
       {/* About */}
       {convo.enrichment?.about && (

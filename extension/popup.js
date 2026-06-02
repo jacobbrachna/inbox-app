@@ -1,4 +1,5 @@
 const syncBtn = document.getElementById('syncBtn');
+const snSyncBtn = document.getElementById('snSyncBtn');
 const statusEl = document.getElementById('status');
 const progressEl = document.getElementById('progress');
 const hintEl = document.getElementById('hint');
@@ -41,97 +42,96 @@ document.getElementById('dumpBtn').addEventListener('click', async () => {
   }
 });
 
-syncBtn.addEventListener('click', async () => {
+const SYNC_ICON_IDLE = `
+  <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
+    <polyline points="23 4 23 10 17 10"></polyline>
+    <polyline points="1 20 1 14 7 14"></polyline>
+    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+  </svg>`;
+const SYNC_ICON_RUNNING = `
+  <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="animation:spin 1s linear infinite">
+    <polyline points="1 4 1 10 7 10"></polyline>
+    <path d="M3.51 15a9 9 0 1 0 .49-4.79"></path>
+  </svg>`;
+
+syncBtn.addEventListener('click', () => {
   syncBtn.disabled = true;
-  syncBtn.innerHTML = `
-    <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="animation:spin 1s linear infinite">
-      <polyline points="1 4 1 10 7 10"></polyline>
-      <path d="M3.51 15a9 9 0 1 0 .49-4.79"></path>
-    </svg>
-    Syncing…`;
-
-  const style = document.createElement('style');
-  style.textContent = '@keyframes spin { to { transform: rotate(360deg); } }';
-  document.head.appendChild(style);
-
+  syncBtn.innerHTML = `${SYNC_ICON_RUNNING} Syncing…`;
   progressEl.textContent = '';
   hintEl.textContent = '';
-  setStatus('Looking for LinkedIn tab…');
+  setStatus('Syncing LinkedIn inbox via API…');
 
-  try {
-    // Find or open LinkedIn messaging tab
-    let [liTab] = await chrome.tabs.query({ url: '*://www.linkedin.com/messaging*' });
+  // API-driven sync runs in the background service worker using your
+  // logged-in cookies. No need to open a LinkedIn tab. Background fires
+  // `progress` messages on chrome.runtime so the listener above updates the
+  // progress line live.
+  chrome.runtime.sendMessage(
+    { action: 'liInitialSyncApi', deepFetch: true },
+    (response) => {
+      syncBtn.disabled = false;
+      syncBtn.innerHTML = `${SYNC_ICON_IDLE} Sync LinkedIn inbox`;
+      hintEl.textContent = 'Make sure Relay is running on localhost:3030';
 
-    if (!liTab) {
-      setStatus('Opening LinkedIn messaging…');
-      liTab = await chrome.tabs.create({ url: 'https://www.linkedin.com/messaging', active: false });
-      // Wait for the tab to load
-      await new Promise((resolve) => {
-        chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
-          if (tabId === liTab.id && info.status === 'complete') {
-            chrome.tabs.onUpdated.removeListener(listener);
-            resolve();
-          }
-        });
+      if (chrome.runtime.lastError) {
+        setStatus('Error: ' + chrome.runtime.lastError.message, 'error');
+        return;
+      }
+      if (!response?.ok) {
+        const reason = response?.reason ?? 'Unknown error';
+        setStatus('Sync failed: ' + reason, 'error');
+        if (/not-logged-in/i.test(reason)) {
+          hintEl.textContent = 'Sign in to LinkedIn in this browser, then retry.';
+        }
+        return;
+      }
+      const convs = response.convs ?? response.count ?? 0;
+      const msgs = response.msgs ?? response.messageCount ?? 0;
+      progressEl.textContent = `${convs} conversations · ${msgs} messages`;
+      setStatus(`Synced ${convs} conversations & ${msgs} messages`, 'success');
+      chrome.storage.local.set({
+        lastSyncedAt: Date.now(),
+        conversationCount: convs,
       });
-    }
+    },
+  );
+});
 
-    // Ensure content script is injected (re-inject if needed)
-    await chrome.scripting.executeScript({
-      target: { tabId: liTab.id },
-      files: ['content.js'],
-    }).catch(() => {}); // Ignore if already injected
+snSyncBtn.addEventListener('click', () => {
+  snSyncBtn.disabled = true;
+  snSyncBtn.innerHTML = `${SYNC_ICON_RUNNING} Syncing…`;
+  progressEl.textContent = '';
+  hintEl.textContent = '';
+  setStatus('Syncing Sales Navigator via API…');
 
-    setStatus('Fetching conversations…');
+  // Mirrors the LinkedIn sync above — runs the 3-phase SN sync
+  // (inbox → per-thread messages → profile enrichment) in the background
+  // service worker using your logged-in cookies. Live phase progress arrives
+  // on the same `progress` channel the listener above handles.
+  chrome.runtime.sendMessage(
+    { action: 'snFullSyncApi' },
+    (response) => {
+      snSyncBtn.disabled = false;
+      snSyncBtn.innerHTML = `${SYNC_ICON_IDLE} Sync Sales Navigator`;
+      hintEl.textContent = 'Make sure Relay is running on localhost:3030';
 
-    // Send sync message to content script
-    const result = await chrome.tabs.sendMessage(liTab.id, { action: 'sync' });
-
-    if (result?.error) {
-      setStatus('Error: ' + result.error, 'error');
-      hintEl.textContent = 'Make sure you are logged in to LinkedIn.';
-      return;
-    }
-
-    const count = result?.count || 0;
-    const conversations = (result?.conversations || []).map(c => ({
-      ...c,
-      _src: c._src || 'li',
-    }));
-
-    if (count === 0) {
-      setStatus('No conversations found. Debug copied to clipboard.', 'error');
-      const dbg = result?.debugLog || 'no debug info';
-      console.log('[Relay debug]\n' + dbg);
-      try { await navigator.clipboard.writeText(dbg); } catch (e) {}
-      hintEl.textContent = 'Paste the clipboard in chat.';
-      return;
-    }
-
-    const msgCount = result?.messageCount || 0;
-    progressEl.textContent = `Loaded ${count} conversations · ${msgCount} messages`;
-    setStatus(`Synced ${count} conversations & ${msgCount} messages`, 'success');
-
-    // Send to background to open Relay
-    await chrome.runtime.sendMessage({
-      action: 'openApp',
-      conversations,
-      messages: result?.messages || {},
-      entities: result?.entities || {},
-      myProfileUrn: result?.myProfileUrn || '',
-    });
-
-  } catch (e) {
-    setStatus('Error: ' + e.message, 'error');
-    console.error('[Relay]', e);
-  } finally {
-    syncBtn.disabled = false;
-    syncBtn.innerHTML = `
-      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-        <polyline points="1 4 1 10 7 10"></polyline>
-        <path d="M3.51 15a9 9 0 1 0 .49-4.79"></path>
-      </svg>
-      Sync Now`;
-    hintEl.textContent = 'Make sure Relay is running on localhost:3030';
-  }
+      if (chrome.runtime.lastError) {
+        setStatus('Error: ' + chrome.runtime.lastError.message, 'error');
+        return;
+      }
+      if (!response?.ok) {
+        const reason = response?.reason ?? 'Unknown error';
+        setStatus('SN sync failed: ' + reason, 'error');
+        if (/not-logged-in/i.test(reason)) {
+          hintEl.textContent = 'Sign in to LinkedIn / Sales Navigator in this browser, then retry.';
+        }
+        return;
+      }
+      const threads = response.threads ?? 0;
+      const msgs = response.deepMsgs ?? 0;
+      const profiles = response.profilesFetched ?? 0;
+      progressEl.textContent = `${threads} threads · ${msgs} messages · ${profiles} profiles`;
+      setStatus(`Synced ${threads} SN threads & ${msgs} messages`, 'success');
+      chrome.storage.local.set({ lastSnSyncedAt: Date.now() });
+    },
+  );
 });

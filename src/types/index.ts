@@ -94,6 +94,9 @@ export type Conversation = {
   isStarred?: boolean;
   aiSummary?: string | null;
   enrichment?: Enrichment | null;
+  // Outbound Queue per-conversation state.
+  queueDismissed?: boolean;
+  manualIcp?: boolean;
 };
 
 export type Snippet = {

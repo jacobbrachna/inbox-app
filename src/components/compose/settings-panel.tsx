@@ -9,6 +9,8 @@ import { cn } from '@/lib/cn';
 import { AccentPicker } from '@/components/theme/accent-picker';
 import { AiSettings } from './ai-settings';
 import { YourContext } from './your-context';
+import { IcpBuilder } from './icp-builder';
+import { ZoominfoSettings } from './zoominfo-settings';
 import { DocumentsPanel } from './documents-panel';
 import { LinkedInImport } from './linkedin-import';
 
@@ -149,6 +151,23 @@ export function SettingsPanel() {
         <h3 className="eyebrow mb-3">Your context</h3>
         <div className="card p-5">
           <YourContext />
+        </div>
+      </section>
+
+      {/* ICP Builder — Claude synthesizes a structured ICP from your inputs.
+          Powers deterministic queue scoring (no per-conv API calls). */}
+      <section className="mb-8">
+        <h3 className="eyebrow mb-3">Ideal Customer Profile</h3>
+        <div className="card p-5">
+          <IcpBuilder />
+        </div>
+      </section>
+
+      {/* ZoomInfo integration — per-contact signals on demand. */}
+      <section className="mb-8">
+        <h3 className="eyebrow mb-3">ZoomInfo</h3>
+        <div className="card p-5">
+          <ZoominfoSettings />
         </div>
       </section>
 

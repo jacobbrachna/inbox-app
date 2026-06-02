@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { CORS, safeParseArray, optionsResponse } from '@/lib/api-utils';
 import type { Participant } from '@/types';
@@ -40,15 +40,36 @@ interface QueueItem {
   // AI fields populated by /api/queue/score-batch
   aiScore: number | null;
   aiSignal: string | null;
+  // ICP fit — 0-100 from Claude, OR 100 when manualIcp override is on.
+  // `isIcp` is a derived boolean (icpFit >= 60 OR manual override).
+  icpFit: number | null;
+  isIcp: boolean;
+  manualIcp: boolean;
+  snoozedUntil: string | null;
 }
 
-export async function GET() {
+// ICP cutoff: anything ≥ this counts as ICP. Tuned to "close fits and clear
+// matches in, weak fits out." Adjustable later if Claude's scoring drifts.
+const ICP_THRESHOLD = 60;
+
+export async function GET(req: NextRequest) {
   const now = Date.now();
+  const { searchParams } = new URL(req.url);
+  // Default view hides dismissed + snoozed-future items. Toggleable from UI.
+  const showHidden = searchParams.get('showHidden') === '1';
+  // Optional strict mode — drops non-ICP-fit items entirely.
+  const onlyIcp = searchParams.get('onlyIcp') === '1';
 
   // Page through to stay under SQLite's 999-param limit on the message
   // include + _count subquery.
   const convIds = await prisma.conversation.findMany({
-    where: { status: { not: 'archived' } },
+    where: {
+      status: { not: 'archived' },
+      ...(showHidden ? {} : {
+        queueDismissed: false,
+        OR: [{ snoozedUntil: null }, { snoozedUntil: { lte: new Date(now) } }],
+      }),
+    },
     select: { id: true },
     orderBy: { lastMessageAt: 'desc' },
   });
@@ -72,6 +93,10 @@ export async function GET() {
     if (c.enrichment) {
       try { enrichment = JSON.parse(c.enrichment); } catch {}
     }
+    // Derived ICP boolean: manual override OR Claude's fit ≥ threshold.
+    const icpFit = c.aiIcpFit ?? null;
+    const manualIcp = c.manualIcp ?? false;
+    const isIcp = manualIcp || (icpFit !== null && icpFit >= ICP_THRESHOLD);
     const base: Omit<QueueItem, 'reason' | 'daysSince'> = {
       id: c.id,
       name: p?.name ?? 'Unknown',
@@ -81,6 +106,10 @@ export async function GET() {
       lastMessageAt: c.lastMessageAt.toISOString(),
       aiScore: c.aiPriorityScore ?? null,
       aiSignal: c.aiPrioritySignal ?? null,
+      icpFit,
+      isIcp,
+      manualIcp,
+      snoozedUntil: c.snoozedUntil ? c.snoozedUntil.toISOString() : null,
     };
 
     const last = c.messages[0];
@@ -134,11 +163,25 @@ export async function GET() {
     }
   }
 
-  // Sort within each bucket. Hot uses AI score primarily, daysSince as tiebreak.
-  hot.sort((a, b) => (b.aiScore ?? -1) - (a.aiScore ?? -1) || a.daysSince - b.daysSince);
+  // Sort within each bucket. ICP fits float to the top; within ICP and within
+  // non-ICP, AI priority + daysSince do the secondary ordering. Overdue keeps
+  // its own ordering because deadlines win over ICP fit when something's
+  // already past due.
+  const icpFirst = (a: QueueItem, b: QueueItem) => Number(b.isIcp) - Number(a.isIcp);
+  hot.sort((a, b) => icpFirst(a, b) || (b.aiScore ?? -1) - (a.aiScore ?? -1) || a.daysSince - b.daysSince);
   overdue.sort((a, b) => b.daysSince - a.daysSince);
-  goingCold.sort((a, b) => (b.aiScore ?? -1) - (a.aiScore ?? -1) || a.daysSince - b.daysSince);
-  stale.sort((a, b) => (b.aiScore ?? -1) - (a.aiScore ?? -1) || b.daysSince - a.daysSince);
+  goingCold.sort((a, b) => icpFirst(a, b) || (b.aiScore ?? -1) - (a.aiScore ?? -1) || a.daysSince - b.daysSince);
+  stale.sort((a, b) => icpFirst(a, b) || (b.aiScore ?? -1) - (a.aiScore ?? -1) || b.daysSince - a.daysSince);
+
+  // Strict mode — when "Only ICP fits" toggle is on, drop non-fit items from
+  // the regular buckets entirely. Manual-ICP rows always survive.
+  if (onlyIcp) {
+    for (const arr of [hot, goingCold, stale, overdue]) {
+      const filtered = arr.filter((it) => it.isIcp);
+      arr.length = 0;
+      arr.push(...filtered);
+    }
+  }
 
   // Top Priority — across-bucket pick. Take any item with AI score >= 70.
   // Cap at 10; sorted by score desc.

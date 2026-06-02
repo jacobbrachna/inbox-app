@@ -41,6 +41,30 @@ const API_DIR = isDev
   ? path.join(__dirname, 'api')
   : path.join(process.resourcesPath, 'app.asar', 'electron', 'api');
 
+// ── .env loader ───────────────────────────────────────────────────────
+// Reads a .env file shipped alongside the .app (or at project root in
+// dev) into process.env. Currently holds the ZoomInfo OAuth client_id +
+// client_secret so they don't live in code/git. Each line: KEY=VALUE.
+// Existing process.env vars win — useful for local overrides.
+function loadDotenv() {
+  const envPath = isDev
+    ? path.join(__dirname, '..', '.env')
+    : path.join(process.resourcesPath, '.env');
+  if (!fs.existsSync(envPath)) return;
+  try {
+    for (const line of fs.readFileSync(envPath, 'utf8').split(/\r?\n/)) {
+      const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/);
+      if (!m) continue;
+      let val = m[2];
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+        val = val.slice(1, -1);
+      }
+      if (process.env[m[1]] === undefined) process.env[m[1]] = val;
+    }
+  } catch {}
+}
+loadDotenv();
+
 const USER_DATA_DIR = path.join(app.getPath('appData'), APP_ID);
 const DB_PATH = path.join(USER_DATA_DIR, 'dev.db');
 const SEED_DB = isDev
@@ -206,6 +230,78 @@ protocol.registerSchemesAsPrivileged([
     },
   },
 ]);
+
+// ── Transient OAuth callback listener ─────────────────────────────────
+// ZoomInfo OAuth redirects to http://localhost:54321/callback?code=...
+// We spin up a one-shot HTTP server on demand, capture the auth code,
+// hand it back to the renderer via a Promise, then tear down. Reuse the
+// same pattern for any future OAuth provider.
+let oauthServer = null;
+let oauthPending = null;
+
+function startOauthListener() {
+  return new Promise((resolve, reject) => {
+    if (oauthPending) return reject(new Error('OAuth already in flight'));
+    oauthPending = { resolve, reject };
+
+    oauthServer = http.createServer((req, res) => {
+      try {
+        const u = new URL(req.url || '/', 'http://localhost:54321');
+        if (u.pathname !== '/callback') {
+          res.writeHead(404, { 'Content-Type': 'text/plain' });
+          res.end('Not found');
+          return;
+        }
+        const code = u.searchParams.get('code');
+        const state = u.searchParams.get('state');
+        const error = u.searchParams.get('error');
+        // Friendly HTML so the user sees a confirmation in their browser tab.
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(`<!doctype html><html><head><title>Relay · ZoomInfo</title>
+          <style>body{font-family:-apple-system,system-ui,sans-serif;background:#0a0a0a;color:#fafafa;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
+          .card{background:#161616;border:1px solid #262626;border-radius:14px;padding:32px 40px;text-align:center;max-width:420px}
+          h1{font-size:18px;margin:0 0 8px;font-weight:600}p{font-size:13px;color:#a1a1a1;margin:0;line-height:1.5}</style></head>
+          <body><div class="card"><h1>${error ? 'ZoomInfo connection failed' : 'ZoomInfo connected'}</h1>
+          <p>${error ? error : 'You can close this tab and return to Relay.'}</p></div></body></html>`);
+        stopOauthListener();
+        if (error) oauthPending?.reject(new Error(`ZoomInfo: ${error}`));
+        else if (code) oauthPending?.resolve({ code, state });
+        else oauthPending?.reject(new Error('No code in callback'));
+        oauthPending = null;
+      } catch (e) {
+        try { res.writeHead(500); res.end(String(e)); } catch {}
+      }
+    });
+    oauthServer.on('error', (e) => {
+      stopOauthListener();
+      oauthPending?.reject(e);
+      oauthPending = null;
+    });
+    oauthServer.listen(54321, '127.0.0.1', () => {
+      log('oauth listener on 127.0.0.1:54321');
+    });
+    // Safety timeout — 5 min, then tear down so we don't hold the port forever.
+    setTimeout(() => {
+      if (oauthPending) {
+        stopOauthListener();
+        oauthPending?.reject(new Error('OAuth flow timed out'));
+        oauthPending = null;
+      }
+    }, 5 * 60 * 1000);
+  });
+}
+
+function stopOauthListener() {
+  try { oauthServer?.close(); } catch {}
+  oauthServer = null;
+}
+
+// Bridge so /api/zoominfo/auth/* (running inside dispatchApi) can call the
+// main-process listener. Same pattern would extend to other OAuth providers.
+globalThis.__relayOAuth = {
+  start: startOauthListener,
+  stop: stopOauthListener,
+};
 
 function registerAppProtocol() {
   protocol.handle('app', async (request) => {

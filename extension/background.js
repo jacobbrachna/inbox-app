@@ -2363,6 +2363,190 @@ function snHeaders(csrf) {
   };
 }
 
+// Full 3-phase Sales Navigator sync. Mirrors what sn-sync-button.js used to
+// do from the SN tab, but runs in the service worker using stored cookies.
+// Phase 1: paginate inbox. Phase 2: per-thread deep fetch. Phase 3: profile
+// enrichment for participant URNs missing headlines.
+const SN_THREAD_DECORATION = SN_INBOX_DECORATION; // same shape per-thread
+const SN_PROFILE_DECORATION =
+  '(listCount,crmStatus,degree,entityUrn,teamlink,objectUrn,firstName,lastName,' +
+  'fullName,headline,inmailRestriction,location,pendingInvitation,' +
+  'profilePictureDisplayImage,savedLead,contactInfo,blockThirdPartyDataSharing,' +
+  'colleague,memberBadges,defaultPosition)';
+
+async function snFullSyncApi({ onProgress } = {}) {
+  const progress = (msg) => { try { onProgress?.(msg); } catch {} };
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  const auth = await getLinkedInAuth();
+  if (!auth) return { ok: false, reason: 'not-logged-in' };
+
+  async function getJson(url, retries = 3) {
+    while (true) {
+      const r = await fetch(url, { headers: snHeaders(auth.csrf), credentials: 'include' });
+      if (r.status === 429 && retries > 0) {
+        await sleep(3000 + Math.random() * 2000);
+        retries--;
+        continue;
+      }
+      const body = await r.text();
+      return { status: r.status, ok: r.ok, body };
+    }
+  }
+
+  const totals = {
+    pages: 0, threads: 0, convsImported: 0,
+    deepThreads: 0, deepMsgs: 0, deepErrs: 0,
+    profilesFetched: 0, profilesPatched: 0,
+  };
+
+  // ── Phase 1: inbox pagination ──
+  progress({ phase: 'inbox', pages: 0, threads: 0 });
+  const allThreadIds = new Set();
+  const allParticipantUrns = new Set();
+  let pageStartsAt = '';
+  let safety = 200;
+  while (safety-- > 0) {
+    const cursor = pageStartsAt || String(Date.now());
+    const url = `https://www.linkedin.com/sales-api/salesApiMessagingThreads?decoration=${snEnc(SN_INBOX_DECORATION)}&count=20&filter=INBOX&pageStartsAt=${cursor}&q=filter`;
+    const { ok, status, body } = await getJson(url);
+    if (!ok) { syncLog('snFull.phase1.fail', { status }); break; }
+    let parsed;
+    try { parsed = JSON.parse(body); } catch { break; }
+    const els = parsed?.data?.elements || [];
+    if (els.length === 0) break;
+    for (const t of els) {
+      if (t?.id) allThreadIds.add(t.id);
+      if (Array.isArray(t?.participants)) {
+        for (const p of t.participants) if (typeof p === 'string') allParticipantUrns.add(p);
+      }
+    }
+    try {
+      const res = await fetch(`${INBOXPRO_URL}/api/import/sales-nav-messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body }),
+      });
+      if (res.ok) {
+        const j = await res.json().catch(() => ({}));
+        totals.convsImported += (j.convsTouched ?? 0);
+      }
+    } catch {}
+    totals.pages++;
+    totals.threads = allThreadIds.size;
+    progress({ phase: 'inbox', pages: totals.pages, threads: totals.threads });
+    const cursors = els.map((t) => t?.nextPageStartsAt).filter((n) => typeof n === 'number');
+    if (cursors.length === 0) break;
+    const next = Math.min(...cursors);
+    if (!next || next === Infinity || String(next) === pageStartsAt) break;
+    pageStartsAt = String(next);
+    await sleep(250);
+  }
+  syncLog('snFull.phase1.done', { pages: totals.pages, threads: totals.threads });
+
+  // ── Phase 2: per-thread deep fetch ──
+  const threadList = Array.from(allThreadIds);
+  progress({ phase: 'messages', done: 0, total: threadList.length });
+  async function deepFetch(tid, retries = 2) {
+    const url = `https://www.linkedin.com/sales-api/salesApiMessagingThreads/${tid}?decoration=${snEnc(SN_THREAD_DECORATION)}&count=1&messageCount=50`;
+    const { ok, status, body } = await getJson(url);
+    if (status === 429 && retries > 0) { await sleep(4000); return deepFetch(tid, retries - 1); }
+    if (!ok) { totals.deepErrs++; return; }
+    // Rewrap single-thread response to match the parser's expected shape.
+    let wrapped = body;
+    try {
+      const j = JSON.parse(body);
+      if (j?.data && !Array.isArray(j.data.elements) && j.data.id) {
+        j.data = { elements: [j.data] };
+        wrapped = JSON.stringify(j);
+      }
+    } catch {}
+    try {
+      const res = await fetch(`${INBOXPRO_URL}/api/import/sales-nav-messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body: wrapped }),
+      });
+      if (res.ok) {
+        const j = await res.json().catch(() => ({}));
+        totals.deepMsgs += j.inserted ?? 0;
+      }
+    } catch {}
+  }
+  let idx = 0;
+  async function deepWorker() {
+    while (idx < threadList.length) {
+      const my = idx++;
+      await deepFetch(threadList[my]);
+      totals.deepThreads++;
+      if (my % 10 === 0) {
+        progress({ phase: 'messages', done: totals.deepThreads, total: threadList.length });
+      }
+      await sleep(200);
+    }
+  }
+  await Promise.all([deepWorker(), deepWorker()]);
+  syncLog('snFull.phase2.done', { ...totals });
+
+  // ── Phase 3: profile enrichment ──
+  let needHeadline = new Set();
+  try {
+    const r = await fetch(`${INBOXPRO_URL}/api/import/sales-nav-profile/needed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ urns: Array.from(allParticipantUrns) }),
+    });
+    if (r.ok) {
+      const j = await r.json();
+      if (Array.isArray(j.needed)) needHeadline = new Set(j.needed);
+    }
+  } catch {}
+  const profUrns = needHeadline.size > 0
+    ? Array.from(needHeadline)
+    : Array.from(allParticipantUrns);
+  progress({ phase: 'profiles', done: 0, total: profUrns.length });
+
+  function parseSalesProfileUrn(urn) {
+    const m = urn.match(/urn:li:fs_salesProfile:\(([^,]+),([^,]+),([^)]+)\)/);
+    return m ? { profileId: m[1], authType: m[2], authToken: m[3] } : null;
+  }
+  async function fetchProfile(urn, retries = 2) {
+    const parts = parseSalesProfileUrn(urn);
+    if (!parts) return;
+    const url = `https://www.linkedin.com/sales-api/salesApiProfiles/(profileId:${parts.profileId},authType:${parts.authType},authToken:${parts.authToken})?decoration=${snEnc(SN_PROFILE_DECORATION)}`;
+    const { ok, status, body } = await getJson(url);
+    if (status === 429 && retries > 0) { await sleep(4000); return fetchProfile(urn, retries - 1); }
+    if (!ok) return;
+    try {
+      const res = await fetch(`${INBOXPRO_URL}/api/import/sales-nav-profile`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body }),
+      });
+      if (res.ok) {
+        const j = await res.json().catch(() => ({}));
+        totals.profilesFetched++;
+        if ((j.patched ?? 0) > 0) totals.profilesPatched += j.patched;
+      }
+    } catch {}
+  }
+  let pidx = 0;
+  async function profWorker() {
+    while (pidx < profUrns.length) {
+      const my = pidx++;
+      await fetchProfile(profUrns[my]);
+      if (my % 20 === 0) {
+        progress({ phase: 'profiles', done: totals.profilesFetched, total: profUrns.length });
+      }
+      await sleep(75);
+    }
+  }
+  await Promise.all([profWorker(), profWorker(), profWorker(), profWorker()]);
+  syncLog('snFull.phase3.done', { ...totals });
+
+  return { ok: true, ...totals };
+}
+
 async function snBackgroundSync() {
   syncLog('snBg.entry', {});
   const auth = await getLinkedInAuth();
@@ -2577,18 +2761,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const result = await linkedInInitialSyncApi({
         deepFetch: message.deepFetch !== false,
         onProgress: (p) => {
-          // Original event (kept for the on-LinkedIn floating card)
           broadcastToRelay({ action: 'li-api-sync-progress', progress: p });
-          // Friendly progress text on the same channel the app already
-          // listens to ("relay-refresh-progress"). Lets the in-app
-          // Refresh / onboarding UI show live status during API sync.
           let msg = '';
           if (p.phase === 'inbox') {
             msg = `Fetching inbox… ${p.convs} conversation${p.convs === 1 ? '' : 's'}`;
           } else if (p.phase === 'messages') {
             msg = `Fetching messages… ${p.done}/${p.total}`;
           }
-          if (msg) broadcastToRelay({ action: 'refresh-progress', message: msg });
+          if (msg) {
+            broadcastToRelay({ action: 'refresh-progress', message: msg });
+            // Also push to any open extension popup. Best-effort — fails
+            // silently when no popup is open.
+            chrome.runtime.sendMessage({ action: 'progress', message: msg }).catch(() => {});
+          }
         },
       });
       // Surface completion on the same channel so any UI listening to
@@ -2605,6 +2790,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       try { await snBackgroundSync(); } catch (e) { syncLog('snRefreshNow.err', { err: e?.message }); }
       sendResponse({ ok: true });
+    })();
+    return true;
+  }
+  if (message.action === 'snFullSyncApi') {
+    (async () => {
+      const result = await snFullSyncApi({
+        onProgress: (p) => {
+          let msg = '';
+          if (p.phase === 'inbox') {
+            msg = `Fetching SN inbox… ${p.pages} pages · ${p.threads} threads`;
+          } else if (p.phase === 'messages') {
+            msg = `Loading SN history… ${p.done}/${p.total}`;
+          } else if (p.phase === 'profiles') {
+            msg = `Enriching SN contacts… ${p.done}/${p.total}`;
+          }
+          if (msg) {
+            broadcastToRelay({ action: 'refresh-progress', message: msg });
+            chrome.runtime.sendMessage({ action: 'progress', message: msg }).catch(() => {});
+          }
+        },
+      });
+      broadcastToRelay({ action: 'refresh-complete', result });
+      sendResponse(result);
     })();
     return true;
   }

@@ -44,9 +44,26 @@ model Conversation {
   // AI Outbound-Queue scoring — populated by /api/queue/score-batch.
   // priority: 0-100 (higher = more urgent for outbound work)
   // signal:   short human description ("Asked about pricing", "Mentioned a deadline")
+  // icpFit:   0-100 fit against AppState.idealCustomerProfile (Claude scores
+  //           the contact's role/headline/company; fuzzy matching is implicit).
   aiPriorityScore Int?
   aiPrioritySignal String?
+  aiIcpFit        Int?
   aiPriorityAt    DateTime?
+  // Outbound-Queue state — user actions on individual threads.
+  // queueDismissed: "Not a priority" — hidden from OBQ until user un-dismisses.
+  // manualIcp:      User override that elevates a non-fit contact into the
+  //                 main queue alongside true ICP matches. Doesn't change the
+  //                 ICP brief itself — kept separate so Claude doesn't drift.
+  // queueSnoozedUntil — reuses the existing `snoozedUntil` field; no new
+  //                     column needed.
+  queueDismissed  Boolean  @default(false)
+  manualIcp       Boolean  @default(false)
+  // Cached ZoomInfo enrichment. JSON: { company: {...}, scoops: [...],
+  // news: [...] } — exact shape mirrors the relevant slices of the ZI
+  // API responses. Pulled on demand via /api/conversations/:id/zoominfo-pull.
+  zoominfoData    String?
+  zoominfoPulledAt DateTime?
   // Enrichment fetched from LinkedIn's profile API (populated by extension).
   // JSON: { company, role, location, currentRoleTenure, ... }
   enrichment      String?
@@ -221,6 +238,22 @@ model AppState {
   outreachGoal          String?  // e.g. "Book intro calls with data security leaders"
   idealCustomerProfile  String?  // free text — titles, industries, size, painpoints
   keyValueProps         String?  // free text — what we actually offer (3-5 bullets)
+  // Source material for the ICP Builder — Claude synthesizes a structured
+  // icpDefinition from these. Stored so the user can re-run with edits.
+  companyWebsiteUrl     String?
+  companyLinkedInUrl    String?
+  // Structured ICP — JSON {targetTitles, titlePatterns, keywords,
+  // seniorityWeights, industries, excludeTitles}. Populated by the ICP
+  // Builder; consumed by /api/icp/rescore + queue scoring.
+  icpDefinition         String?
+  icpBuiltAt            DateTime?
+  // ZoomInfo OAuth tokens. Per-user state — never in .env, never in code.
+  // Refresh token lasts weeks; we silently refresh access token when
+  // expired. Disconnect clears all three.
+  zoominfoAccessToken    String?
+  zoominfoRefreshToken   String?
+  zoominfoTokenExpiresAt DateTime?
+  zoominfoConnectedAt    DateTime?
   // The user's own LinkedIn slug — populated from a URL paste in Settings.
   // Used to refresh employment history + auto-fill role/company/About from
   // their own /in/ page via the same scraper that runs on contacts.

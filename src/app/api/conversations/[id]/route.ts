@@ -60,6 +60,11 @@ export async function PATCH(
       data.needsReview = false;
     }
     if (patch.needsReview !== undefined) data.needsReview = patch.needsReview;
+    // Outbound Queue state — "Not a priority" (queueDismissed) and the
+    // manual ICP override (manualIcp) live on the conversation row so
+    // they survive sync without per-action history.
+    if (patch.queueDismissed !== undefined) data.queueDismissed = patch.queueDismissed;
+    if (patch.manualIcp !== undefined) data.manualIcp = patch.manualIcp;
 
     const updated = await prisma.conversation.update({
       where: { id },

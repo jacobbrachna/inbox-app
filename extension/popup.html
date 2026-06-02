@@ -150,6 +150,16 @@
       color: var(--text-muted);
       cursor: not-allowed;
     }
+    .btn.secondary {
+      background: var(--card);
+      color: var(--text-primary);
+      border: 1px solid var(--hairline);
+    }
+    .btn.secondary:hover:not(:disabled) {
+      background: var(--card-hover);
+      border-color: var(--text-muted);
+    }
+    .btn + .btn { margin-top: 8px; }
 
     /* ── Progress + hint text ── */
     .progress {
@@ -227,7 +237,15 @@
       <polyline points="1 20 1 14 7 14"></polyline>
       <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
     </svg>
-    Sync inbox now
+    Sync LinkedIn inbox
+  </button>
+  <button class="btn secondary" id="snSyncBtn">
+    <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
+      <polyline points="23 4 23 10 17 10"></polyline>
+      <polyline points="1 20 1 14 7 14"></polyline>
+      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+    </svg>
+    Sync Sales Navigator
   </button>
   <div class="progress" id="progress"></div>
   <div class="hint" id="hint">Make sure Relay is running on localhost:3030</div>

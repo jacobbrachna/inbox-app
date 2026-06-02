@@ -29,11 +29,17 @@ files:
   - "!node_modules/clsx/**/*"
 
 # Static export + seed DB ride alongside the .app at Contents/Resources/.
+# .env ships too — it holds the ZoomInfo OAuth client_id + client_secret
+# that identify Relay as a registered ZI app. electron/main.js reads it at
+# boot into process.env. Per-user tokens are NOT in .env; they live in
+# each user's local DB.
 extraResources:
   - from: "out"
     to: "out"
   - from: "prisma/dev.db.seed"
     to: "dev.db.seed"
+  - from: ".env"
+    to: ".env"
 
 extraMetadata:
   main: electron/main.js

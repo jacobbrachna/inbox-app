@@ -21,6 +21,11 @@ export async function GET() {
       myProfileSlug: state?.myProfileSlug ?? '',
       myEmploymentHistory: state?.myEmploymentHistory ?? '',
       myProfileRefreshedAt: state?.myProfileRefreshedAt ?? null,
+      // ICP Builder fields
+      companyWebsiteUrl: state?.companyWebsiteUrl ?? '',
+      companyLinkedInUrl: state?.companyLinkedInUrl ?? '',
+      icpDefinition: state?.icpDefinition ?? null,
+      icpBuiltAt: state?.icpBuiltAt ?? null,
     },
     { headers: CORS },
   );
@@ -29,6 +34,8 @@ export async function GET() {
 const SENDER_FIELDS = [
   'myCompany', 'myRole', 'companyOneLiner', 'outreachGoal',
   'idealCustomerProfile', 'keyValueProps', 'myProfileSlug',
+  // ICP Builder source-material fields + the JSON definition itself.
+  'companyWebsiteUrl', 'companyLinkedInUrl', 'icpDefinition',
 ] as const;
 
 // Pulls "abcd-ef-123" out of any /in/ URL or just returns the slug if it
