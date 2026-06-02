@@ -45,6 +45,10 @@ async function checkConnection() {
 function renderConnection(ok) {
   connDot.className = 'conn-dot ' + (ok ? 'on' : 'off');
   connText.textContent = ok ? 'Connected' : 'App not running';
+  // The hint line only appears when there's actually something to say —
+  // disconnected (or a sync error sets it). Avoids a permanent scary banner.
+  if (ok) { hintEl.style.display = 'none'; }
+  else { hintEl.style.display = 'block'; hintEl.textContent = 'Open the Relay app and keep it running.'; }
 }
 
 // ── Active tab → current profile ─────────────────────────────────────────
@@ -202,9 +206,17 @@ importBtn.addEventListener('click', async () => {
   try {
     await chrome.tabs.sendMessage(currentTabId, { action: 'relay-import-current-profile' });
   } catch {
-    importBtn.disabled = false; importBtn.textContent = 'Import to Relay';
-    progressEl.textContent = 'Reload the profile, then try again.';
-    return;
+    // The tab predates this version of the extension, so its content script
+    // isn't injected. Inject profile-capture.js on the fly, then retry once.
+    try {
+      await chrome.scripting.executeScript({ target: { tabId: currentTabId }, files: ['profile-capture.js'] });
+      await sleep(500);
+      await chrome.tabs.sendMessage(currentTabId, { action: 'relay-import-current-profile' });
+    } catch {
+      importBtn.disabled = false; importBtn.textContent = 'Import to Relay';
+      progressEl.textContent = 'Refresh this LinkedIn tab, then Import again.';
+      return;
+    }
   }
   for (let i = 0; i < 14; i++) {
     await sleep(2000);
@@ -258,7 +270,7 @@ function runSync(btn, idleLabel, action, payload, onResult) {
     if (!response?.ok) {
       const reason = response?.reason ?? 'Unknown error';
       progressEl.textContent = 'Failed: ' + reason;
-      if (/not-logged-in/i.test(reason)) hintEl.textContent = 'Sign into LinkedIn in this browser, then retry.';
+      if (/not-logged-in/i.test(reason)) { hintEl.style.display = 'block'; hintEl.textContent = 'Sign into LinkedIn in this browser, then retry.'; }
       return;
     }
     onResult(response);
