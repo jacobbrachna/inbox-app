@@ -15,9 +15,10 @@ export async function GET() {
   const lastSyncedAt = appState?.lastSyncedAt ? appState.lastSyncedAt.getTime() : 0;
   const myProfileUrn = appState?.myProfileUrn ?? '';
   const profileName = appState?.profileName ?? '';
+  const profileAvatarUrl = appState?.profileAvatarUrl ?? '';
 
   return NextResponse.json(
-    { conversationsByUrn, lastSyncedAt, myProfileUrn, profileName },
+    { conversationsByUrn, lastSyncedAt, myProfileUrn, profileName, profileAvatarUrl },
     { headers: CORS },
   );
 }

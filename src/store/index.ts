@@ -585,6 +585,22 @@ export const useStore = create<AppState>()((set, get) => ({
         const r = await fetch('/api/state');
         if (!r.ok) return;
         const j = await r.json();
+
+        // Hydrate the sidebar account indicator from the persisted profile.
+        // Without this, auth.isAuthenticated stays false and the footer is
+        // permanently stuck on "Not connected" even though we know who you are.
+        if (j?.profileName) {
+          const a = get().auth;
+          if (!a.isAuthenticated || a.profileName !== j.profileName || a.profileAvatarUrl !== (j.profileAvatarUrl || undefined)) {
+            get().setAuth({
+              isAuthenticated: true,
+              profileName: j.profileName,
+              profileAvatarUrl: j.profileAvatarUrl || undefined,
+              profileId: j.myProfileUrn || undefined,
+            });
+          }
+        }
+
         const serverMap: Record<string, number> = j?.conversationsByUrn || {};
 
         // Detect: new conversation OR existing one's timestamp advanced
