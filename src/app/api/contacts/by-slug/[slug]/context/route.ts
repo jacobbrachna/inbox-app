@@ -54,7 +54,10 @@ const norm = (s: string | null | undefined) => (s ?? '').toLowerCase().replace(/
 export async function GET(req: NextRequest, ctx: { params: Promise<{ slug: string }> }) {
   const { slug } = await ctx.params;
   if (!slug) return NextResponse.json({ exists: false }, { headers: CORS });
-  const name = req.nextUrl.searchParams.get('name')?.trim() || '';
+  // Read query robustly: NextRequest has .nextUrl under `next start`, but the
+  // Electron handler passes a plain Request — fall back to parsing req.url.
+  const searchParams = req.nextUrl?.searchParams ?? new URL(req.url).searchParams;
+  const name = searchParams.get('name')?.trim() || '';
 
   let contact: ContactWithConvs | null = await findBySlug(slug);
   let matchedBy: 'slug' | 'name' = 'slug';

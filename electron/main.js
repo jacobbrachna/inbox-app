@@ -182,8 +182,11 @@ function loadHandler(route) {
 }
 
 async function dispatchApi(method, url, body, headers) {
-  // url is like "/api/state". Strip the /api prefix for routing.
-  const pathname = url.replace(/^\/api\//, '');
+  // url is like "/api/state" or "/api/contacts/search?q=foo". Strip the query
+  // string before resolving the handler — the route regexes are anchored ($),
+  // so a trailing "?..." would miss every match. Keep the full url (with query)
+  // on the Request so handlers can still read the params.
+  const pathname = url.split('?')[0].replace(/^\/api\//, '');
   log(`api ${method} ${url}`);
   const entry = loadHandler(pathname);
   if (!entry) {
@@ -197,11 +200,19 @@ async function dispatchApi(method, url, body, headers) {
     return new Response(`Method ${method} not allowed`, { status: 405 });
   }
   try {
-    const req = new Request(`app://${url}`, {
+    const fullUrl = `app://${url}`;
+    const req = new Request(fullUrl, {
       method,
       headers,
       body: method === 'GET' || method === 'HEAD' ? undefined : body,
     });
+    // Next.js route handlers read query params via `req.nextUrl.searchParams`.
+    // A plain Request has no `nextUrl`, so attach one (parsed from the full
+    // url incl. query) — without this, every query-param route (search,
+    // analytics, parser-health, contacts context) throws in the packaged app.
+    try {
+      Object.defineProperty(req, 'nextUrl', { value: new URL(fullUrl), configurable: true, writable: true });
+    } catch { /* read-only env — handlers fall back to new URL(req.url) */ }
     // Next.js-style handler signature: (request, { params })
     const res = await fn(req, { params: Promise.resolve(params) });
     return res;
@@ -315,7 +326,9 @@ function registerAppProtocol() {
         ? await new Response(request.body).arrayBuffer()
         : undefined;
       const headers = Object.fromEntries(request.headers);
-      return dispatchApi(request.method, pathname, buf ? Buffer.from(buf) : undefined, headers);
+      // Include the query string (url.search) so the UI's own query-param
+      // fetches (search, analytics, …) reach handlers intact.
+      return dispatchApi(request.method, pathname + url.search, buf ? Buffer.from(buf) : undefined, headers);
     }
 
     // Static files. Strip leading slash and normalize to STATIC_DIR.
