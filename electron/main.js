@@ -352,6 +352,23 @@ function registerAppProtocol() {
 // listener binds loopback-only, routes through the same dispatchApi()
 // as the renderer. The user never sees this; it's a private IPC channel
 // for the extension. The UI itself is on app://, not localhost.
+// SECURITY: the :3030 API is a private channel for the Relay extension. Only
+// allow callers whose Origin proves they are the extension (chrome-extension://),
+// our LinkedIn content scripts (www.linkedin.com — they POST captures here), or
+// the app itself. A web page you visit sends its own http(s) Origin (the browser
+// sets it and a page cannot forge it), so rejecting those blocks the drive-by
+// threat: a random site can no longer read your inbox, overwrite your API key,
+// or wipe the DB via 127.0.0.1:3030. (Absent Origin = the extension service
+// worker / non-browser local callers — allowed; residual local-process and
+// linkedin.com-context risk is tracked in SECURITY-AUDIT.md for token hardening.)
+function isAllowedOrigin(origin) {
+  if (!origin || origin === 'null') return true;
+  if (origin.startsWith('chrome-extension://')) return true;
+  if (origin.startsWith('app://')) return true;
+  if (origin === 'https://www.linkedin.com') return true;
+  return false;
+}
+
 function startExtensionListener() {
   const server = http.createServer(async (req, res) => {
     try {
@@ -359,6 +376,12 @@ function startExtensionListener() {
       if (!url.startsWith('/api/')) {
         res.writeHead(404, { 'Content-Type': 'text/plain' });
         res.end('Not found');
+        return;
+      }
+      if (!isAllowedOrigin(req.headers.origin)) {
+        log(`ext listener: blocked origin ${req.headers.origin} for ${req.method} ${url}`);
+        res.writeHead(403, { 'Content-Type': 'text/plain', 'access-control-allow-origin': '*' });
+        res.end('Forbidden origin');
         return;
       }
       const chunks = [];
@@ -447,7 +470,9 @@ function startExtensionListener() {
   });
 
   server.on('upgrade', (req, socket, head) => {
-    if (req.url === '/ws') {
+    // Same Origin gate as the HTTP API — a web page must not be able to open
+    // the broker socket and inject/intercept renderer↔extension messages.
+    if (req.url === '/ws' && isAllowedOrigin(req.headers.origin)) {
       wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
     } else {
       socket.destroy();
