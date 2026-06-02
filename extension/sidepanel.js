@@ -67,11 +67,14 @@ async function readProfileDisplay(tabId) {
     const [res] = await chrome.scripting.executeScript({
       target: { tabId },
       func: () => {
-        const h1 = document.querySelector('h1');
-        return {
-          name: h1 ? h1.textContent.replace(/\s+/g, ' ').trim() : '',
-          headline: document.querySelector('.text-body-medium.break-words')?.textContent?.replace(/\s+/g, ' ').trim() || '',
-        };
+        const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+        // Name: the profile's main <h1> is the person's name. Fall back to the
+        // page <title> ("(12) Mark Overton | LinkedIn" → "Mark Overton").
+        let name = clean(document.querySelector('main h1, h1')?.textContent);
+        if (!name) name = clean(document.title).replace(/^\(\d+\+?\)\s*/, '').replace(/\s*\|\s*LinkedIn.*$/i, '').trim();
+        let headline = clean(document.querySelector('.text-body-medium.break-words')?.textContent);
+        if (!headline) headline = clean(document.querySelector('meta[property="og:description"]')?.getAttribute('content'));
+        return { name, headline };
       },
     });
     return res?.result || { name: '', headline: '' };
@@ -203,28 +206,43 @@ importBtn.addEventListener('click', async () => {
   const slug = currentSlug;
   importBtn.disabled = true;
   importBtn.innerHTML = `${SYNC_RUN} Importing…`;
+  progressEl.textContent = '';
+
+  // Self-contained import: read the profile straight from the page (one-shot,
+  // no persistent injection) and POST to /api/profile-capture. The endpoint
+  // matches the contact by name and attaches this profile's slug + URL — which
+  // is exactly the link that was missing (message-synced contacts have no
+  // slug). No dependency on content scripts being present in the tab.
+  const info = await readProfileDisplay(currentTabId);
+  if (!info.name) {
+    importBtn.disabled = false; importBtn.textContent = 'Import to Relay';
+    progressEl.textContent = 'Could not read this profile — reload the LinkedIn tab and retry.';
+    return;
+  }
+  const url = `https://www.linkedin.com/in/${encodeURIComponent(slug)}/`;
   try {
-    await chrome.tabs.sendMessage(currentTabId, { action: 'relay-import-current-profile' });
-  } catch {
-    // The tab predates this version of the extension, so its content script
-    // isn't injected. Inject profile-capture.js on the fly, then retry once.
-    try {
-      await chrome.scripting.executeScript({ target: { tabId: currentTabId }, files: ['profile-capture.js'] });
-      await sleep(500);
-      await chrome.tabs.sendMessage(currentTabId, { action: 'relay-import-current-profile' });
-    } catch {
+    const r = await fetch(`${RELAY}/api/profile-capture`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, name: info.name, headline: info.headline || undefined }),
+    });
+    if (!r.ok) {
       importBtn.disabled = false; importBtn.textContent = 'Import to Relay';
-      progressEl.textContent = 'Refresh this LinkedIn tab, then Import again.';
+      progressEl.textContent = 'Import failed — is the Relay app running?';
       return;
     }
+  } catch {
+    importBtn.disabled = false; importBtn.textContent = 'Import to Relay';
+    progressEl.textContent = 'Import failed — is the Relay app running?';
+    return;
   }
-  for (let i = 0; i < 14; i++) {
-    await sleep(2000);
+  // The capture write is synchronous; re-check a couple times to be safe.
+  for (let i = 0; i < 5; i++) {
+    await sleep(800);
     if (currentSlug !== slug) return;
     const ctx = await fetchContext(slug);
     if (ctx?.exists) { renderProfile(); return; }
   }
-  importBtn.disabled = false; importBtn.textContent = 'Import to Relay';
+  renderProfile();
 });
 
 // ── Search Relay ─────────────────────────────────────────────────────────
