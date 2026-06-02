@@ -25,7 +25,6 @@ interface OnboardingWizardProps {
 }
 
 export function OnboardingWizard({ preview = false, onComplete }: OnboardingWizardProps) {
-  const { conversations } = useStore();
   const [step, setStep] = useState<number>(() => {
     // Preview mode always starts at step 0 so you can walk through cleanly.
     if (preview) return 0;
@@ -39,20 +38,16 @@ export function OnboardingWizard({ preview = false, onComplete }: OnboardingWiza
     storage.onboardingStep.set(step);
   }, [step, preview]);
 
-  // Auto-advance past Sign-in once the first batch of conversations lands.
-  // Previously gated to >=20 as a reload safety; now we trust any positive
-  // count because SignInStep listens for the sync events directly.
-  useEffect(() => {
+  // Advance past Sign-in ONLY when the user's own sync (triggered from that
+  // step) completes — wired to SignInStep via onSynced below. We deliberately
+  // do NOT auto-advance just because `conversations.length > 0`: the
+  // extension's passive/background capture can populate the DB before the user
+  // has run a deliberate sync, which used to silently skip the Sign-in step
+  // entirely (user never got to open LinkedIn / Sales Nav and run a real sync).
+  const advancePastSignIn = useCallback(() => {
     if (preview) return;
-    if (conversations.length > 0 && step === 1) {
-      setStep(2);
-    }
-    // Reload-safety: if a user comes back with a populated DB and is somehow
-    // earlier than Sign-in, jump them to Import directly.
-    if (conversations.length >= 20 && step < 2) {
-      setStep(2);
-    }
-  }, [conversations.length, step, preview]);
+    setStep((s) => (s === 1 ? 2 : s));
+  }, [preview]);
 
   const current = STEPS[step];
   const onLast = step === STEPS.length - 1;
@@ -121,7 +116,7 @@ export function OnboardingWizard({ preview = false, onComplete }: OnboardingWiza
         {/* Step content */}
         <div className="min-h-[280px]">
           {current.id === 'extension' && <ExtensionStep ready={extensionReady} onContinue={goNext} />}
-          {current.id === 'signin' && <SignInStep extensionReady={extensionReady} />}
+          {current.id === 'signin' && <SignInStep extensionReady={extensionReady} onSynced={advancePastSignIn} />}
           {current.id === 'import' && <ImportStep />}
           {current.id === 'ai' && <AiKeyStep />}
           {current.id === 'done' && <DoneStep onBackToSignIn={() => setStep(1)} />}
@@ -288,11 +283,12 @@ function ExtensionStep({ ready, onContinue }: { ready: boolean; onContinue: () =
   );
 }
 
-function SignInStep({ extensionReady }: { extensionReady: boolean }) {
+function SignInStep({ extensionReady, onSynced }: { extensionReady: boolean; onSynced: () => void }) {
   // Live progress from the extension bridge. We surface the latest progress
   // message (e.g. "Fetched page 3 of 12"), the running sync result on
-  // completion, and any failure reason. The parent wizard auto-advances
-  // when conversations.length > 0, which loadFromServer triggers below.
+  // completion, and any failure reason. When the user's OWN sync completes we
+  // call onSynced() to advance the wizard — see the parent for why we no
+  // longer advance off raw conversations.length.
   const { loadFromServer } = useStore();
   const [progress, setProgress] = useState<string | null>(null);
   const [syncDone, setSyncDone] = useState<{ count: number; messageCount: number } | null>(null);
@@ -311,9 +307,11 @@ function SignInStep({ extensionReady }: { extensionReady: boolean }) {
         if (r?.ok) {
           setSyncDone({ count: r.count ?? 0, messageCount: r.messageCount ?? 0 });
           setProgress(null);
-          // Pull the freshly synced conversations into the store, which
-          // causes the parent wizard to auto-advance.
+          // Pull the freshly synced conversations into the store, then advance
+          // the wizard after a beat so the success card is briefly visible.
+          // This is the ONLY path that auto-advances off Sign-in.
           void loadFromServer();
+          window.setTimeout(onSynced, 1200);
         } else {
           setSyncError(r?.reason ?? 'Sync failed');
           setProgress(null);
@@ -323,7 +321,7 @@ function SignInStep({ extensionReady }: { extensionReady: boolean }) {
     }
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [loadFromServer]);
+  }, [loadFromServer, onSynced]);
 
   function startSyncFromHere() {
     if (!extensionReady) return;
