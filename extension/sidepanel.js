@@ -1,44 +1,53 @@
 // Relay side panel — the extension's primary surface. Renders in Chrome's own
 // side panel (NOT injected into linkedin.com), so it never modifies LinkedIn's
-// page and can't be detected by a page-scan. Two jobs:
-//   1. "On this profile" — import the LinkedIn profile in the active tab.
-//   2. "Sync inbox" — the LinkedIn / Sales Navigator syncs (moved from popup).
+// page. Jobs:
+//   1. "On this profile" — who this person is to you (Relay context: existing
+//      messages + their source, AI summary, ICP fit, follow-up, labels), an
+//      Import button, and AI Draft reply.
+//   2. "Search Relay" — find anyone you've talked to, jump to their profile.
+//   3. "Sync inbox" — LinkedIn / Sales Navigator syncs (moved from the popup).
 
 const RELAY = 'http://localhost:3030';
-
 const el = (id) => document.getElementById(id);
-const connDot = el('connDot');
-const connText = el('connText');
-const profileEmpty = el('profileEmpty');
-const profileBody = el('profileBody');
-const profileName = el('profileName');
-const profileHeadline = el('profileHeadline');
-const profileStatus = el('profileStatus');
-const profileStatusText = el('profileStatusText');
-const importBtn = el('importBtn');
-const syncBtn = el('syncBtn');
-const snSyncBtn = el('snSyncBtn');
-const progressEl = el('progress');
-const hintEl = el('hint');
-
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const SYNC_ICON_IDLE = `<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>`;
-const SYNC_ICON_RUNNING = `<svg width="14" height="14" class="spin" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 .49-4.79"></path></svg>`;
+// Tiny DOM builder — keeps all user content as text nodes (no innerHTML for data).
+function h(tag, props = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (v == null) continue;
+    if (k === 'class') e.className = v;
+    else if (k === 'text') e.textContent = v;
+    else if (k.startsWith('on') && typeof v === 'function') e.addEventListener(k.slice(2).toLowerCase(), v);
+    else e.setAttribute(k, v);
+  }
+  for (const c of kids) { if (c == null) continue; e.append(c.nodeType ? c : document.createTextNode(String(c))); }
+  return e;
+}
 
-// ── App connection status ────────────────────────────────────────────────
+const connDot = el('connDot'), connText = el('connText');
+const profileEmpty = el('profileEmpty'), profileBody = el('profileBody');
+const profileName = el('profileName'), profileHeadline = el('profileHeadline');
+const profilePills = el('profilePills'), profileContext = el('profileContext');
+const importBtn = el('importBtn');
+const searchInput = el('searchInput'), searchResults = el('searchResults');
+const syncBtn = el('syncBtn'), snSyncBtn = el('snSyncBtn');
+const progressEl = el('progress'), hintEl = el('hint');
+
+const SYNC_IDLE = `<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>`;
+const SYNC_RUN = `<svg width="14" height="14" class="spin" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 .49-4.79"></path></svg>`;
+
+// ── Connection ───────────────────────────────────────────────────────────
 async function checkConnection() {
-  try {
-    const r = await fetch(`${RELAY}/api/state`, { signal: AbortSignal.timeout(2500) });
-    return r.ok;
-  } catch { return false; }
+  try { return (await fetch(`${RELAY}/api/state`, { signal: AbortSignal.timeout(2500) })).ok; }
+  catch { return false; }
 }
 function renderConnection(ok) {
   connDot.className = 'conn-dot ' + (ok ? 'on' : 'off');
   connText.textContent = ok ? 'Connected' : 'App not running';
 }
 
-// ── Active tab → current LinkedIn profile ────────────────────────────────
+// ── Active tab → current profile ─────────────────────────────────────────
 function slugFromUrl(url) {
   const m = (url || '').match(/^https?:\/\/www\.linkedin\.com\/in\/([^/?#]+)/);
   return m ? decodeURIComponent(m[1]) : null;
@@ -47,130 +56,205 @@ async function getActiveTab() {
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   return tab || null;
 }
-// One-shot READ of the page (name + headline) for display only. Reading the
-// DOM is not injection — nothing is added to LinkedIn's page, nothing persists.
+// Read-only page read for display (name/headline) when the person isn't in
+// Relay yet. Reading the DOM isn't injection — nothing is added or persisted.
 async function readProfileDisplay(tabId) {
   try {
     const [res] = await chrome.scripting.executeScript({
       target: { tabId },
       func: () => {
         const h1 = document.querySelector('h1');
-        const name = h1 ? h1.textContent.replace(/\s+/g, ' ').trim() : '';
-        const headline = document.querySelector('.text-body-medium.break-words')?.textContent?.replace(/\s+/g, ' ').trim() || '';
-        return { name, headline };
+        return {
+          name: h1 ? h1.textContent.replace(/\s+/g, ' ').trim() : '',
+          headline: document.querySelector('.text-body-medium.break-words')?.textContent?.replace(/\s+/g, ' ').trim() || '',
+        };
       },
     });
     return res?.result || { name: '', headline: '' };
   } catch { return { name: '', headline: '' }; }
 }
-async function fetchStatus(slug) {
+async function fetchContext(slug) {
   try {
-    const r = await fetch(`${RELAY}/api/contacts/by-slug/${encodeURIComponent(slug)}/status`, { signal: AbortSignal.timeout(3000) });
-    if (r.ok) return await r.json(); // { exists, messageable }
+    const r = await fetch(`${RELAY}/api/contacts/by-slug/${encodeURIComponent(slug)}/context`, { signal: AbortSignal.timeout(4000) });
+    if (r.ok) return await r.json();
   } catch {}
   return null;
 }
 
-let currentSlug = null;
-let currentTabId = null;
+let currentSlug = null, currentTabId = null;
 
 async function renderProfile() {
   const tab = await getActiveTab();
   const slug = tab ? slugFromUrl(tab.url) : null;
   currentSlug = slug;
   currentTabId = tab?.id ?? null;
+  profileContext.replaceChildren();
+  profilePills.replaceChildren();
 
-  if (!slug) {
-    profileBody.classList.add('hidden');
-    profileEmpty.classList.remove('hidden');
-    return;
-  }
-  profileEmpty.classList.add('hidden');
-  profileBody.classList.remove('hidden');
+  if (!slug) { profileBody.classList.add('hidden'); profileEmpty.classList.remove('hidden'); return; }
+  profileEmpty.classList.add('hidden'); profileBody.classList.remove('hidden');
 
-  // Name/headline from the page (best-effort); fall back to a tidied slug.
-  const { name, headline } = await readProfileDisplay(tab.id);
-  profileName.textContent = name || slug.replace(/-+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-  profileHeadline.textContent = headline || '';
+  const [ctx, page] = await Promise.all([fetchContext(slug), readProfileDisplay(tab.id)]);
+  if (currentSlug !== slug) return; // navigated away mid-fetch
 
-  // Relay status.
-  profileStatus.className = 'profile-status';
-  profileStatusText.textContent = 'Checking…';
-  const status = await fetchStatus(slug);
-  applyStatus(status);
-}
+  const c = ctx?.contact;
+  profileName.textContent = (ctx?.exists && c?.name) || page.name || slug.replace(/-+/g, ' ').replace(/\b\w/g, (x) => x.toUpperCase());
+  profileHeadline.textContent = (ctx?.exists && c?.headline) || page.headline || '';
 
-function applyStatus(status) {
-  if (status?.exists) {
-    profileStatus.className = 'profile-status in';
-    profileStatusText.textContent = status.messageable ? 'In Relay · in your inbox' : 'In Relay';
+  if (ctx?.exists) {
+    renderContext(ctx);
+    importBtn.className = 'btn secondary small';
     importBtn.textContent = 'Re-import';
-    importBtn.disabled = false;
   } else {
-    profileStatus.className = 'profile-status';
-    profileStatusText.textContent = 'Not in Relay yet';
+    profilePills.append(h('span', { class: 'pill' }, h('span', { class: 'pip' }), 'Not in Relay yet'));
+    importBtn.className = 'btn small';
     importBtn.textContent = 'Import to Relay';
-    importBtn.disabled = false;
+  }
+  importBtn.disabled = false;
+}
+
+function renderContext(ctx) {
+  const convs = ctx.conversations || [];
+  // Pills: In Relay · ICP fit · follow-up · labels (deduped).
+  profilePills.append(h('span', { class: 'pill in' }, h('span', { class: 'pip' }), 'In Relay'));
+  const icp = convs.find((v) => v.aiIcpFit != null || v.manualIcp);
+  if (icp) {
+    const txt = icp.manualIcp ? 'ICP ★' : `ICP ${icp.aiIcpFit}%`;
+    profilePills.append(h('span', { class: 'pill icp' }, txt));
+  }
+  const fu = convs.find((v) => v.followUpAt);
+  if (fu) {
+    const d = new Date(fu.followUpAt);
+    profilePills.append(h('span', { class: 'pill followup' }, `Follow up ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`));
+  }
+  const seen = new Set();
+  for (const v of convs) for (const l of (v.labels || [])) {
+    if (seen.has(l.name)) continue; seen.add(l.name);
+    profilePills.append(h('span', { class: 'pill label' }, l.name));
+    if (seen.size >= 3) break;
+  }
+
+  // AI summary (first thread that has one).
+  const sum = convs.find((v) => v.aiSummary)?.aiSummary;
+  if (sum) profileContext.append(h('div', { class: 'ai-summary', text: sum }));
+
+  // Threads — messages + where they're from + Draft reply.
+  for (const v of convs) {
+    const thread = h('div', { class: 'thread' });
+    const isSn = v.source === 'sales_nav';
+    thread.append(h('div', { class: 'thread-head' },
+      h('span', { class: 'src-badge' + (isSn ? ' sn' : '') }, v.sourceLabel || v.source),
+      h('span', { class: 'pill', style: 'font-size:10px;background:none;padding:0;color:var(--text-muted)' },
+        v.lastMessageAt ? new Date(v.lastMessageAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : ''),
+    ));
+    const msgs = (v.messages || []).slice(-4);
+    if (!msgs.length) thread.append(h('div', { class: 'msg' }, h('span', { class: 'txt' }, 'No messages yet.')));
+    for (const m of msgs) {
+      thread.append(h('div', { class: 'msg' + (m.isFromMe ? ' me' : '') },
+        h('span', { class: 'who' }, (m.isFromMe ? 'You' : (m.senderName || 'Them')) + ': '),
+        h('span', { class: 'txt' }, m.body.length > 180 ? m.body.slice(0, 180) + '…' : m.body),
+      ));
+    }
+    const draftBtn = h('button', { class: 'btn tiny secondary', style: 'margin-top:8px' }, 'Draft reply');
+    const draftSlot = h('div');
+    draftBtn.addEventListener('click', () => draftReply(v.id, draftBtn, draftSlot));
+    thread.append(draftBtn, draftSlot);
+    profileContext.append(thread);
   }
 }
 
-// ── Import the current profile ───────────────────────────────────────────
+// ── AI Draft reply ───────────────────────────────────────────────────────
+async function draftReply(conversationId, btn, slot) {
+  btn.disabled = true;
+  btn.innerHTML = `${SYNC_RUN} Drafting…`;
+  slot.replaceChildren();
+  try {
+    const r = await fetch(`${RELAY}/api/ai/draft-reply`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conversationId }),
+    });
+    const d = await r.json();
+    if (!r.ok) { slot.append(h('div', { class: 'hint', style: 'color:var(--danger)' }, d.error || 'Draft failed')); return; }
+    const drafts = d.drafts || [];
+    if (!drafts.length) { slot.append(h('div', { class: 'hint' }, 'No draft returned. Add an API key in Settings?')); return; }
+    for (const text of drafts) {
+      const box = h('div', { class: 'draft-box' }, h('div', { class: 'draft-text', text }));
+      const copyBtn = h('button', { class: 'btn tiny secondary' }, 'Copy');
+      copyBtn.addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText(text); copyBtn.textContent = 'Copied ✓'; setTimeout(() => (copyBtn.textContent = 'Copy'), 1400); } catch {}
+      });
+      box.append(h('div', { class: 'draft-actions' }, copyBtn));
+      slot.append(box);
+    }
+  } catch (e) {
+    slot.append(h('div', { class: 'hint', style: 'color:var(--danger)' }, 'Draft failed — is the Relay app running?'));
+  } finally {
+    btn.disabled = false; btn.textContent = 'Draft reply';
+  }
+}
+
+// ── Import current profile ───────────────────────────────────────────────
 importBtn.addEventListener('click', async () => {
   if (!currentSlug || currentTabId == null) return;
   const slug = currentSlug;
   importBtn.disabled = true;
-  importBtn.innerHTML = `${SYNC_ICON_RUNNING} Importing…`;
-
-  // Ask the profile-capture content script (already running on the /in/ page)
-  // to capture the profile in place — no new tab, no on-page UI.
-  let acked = false;
+  importBtn.innerHTML = `${SYNC_RUN} Importing…`;
   try {
-    const resp = await chrome.tabs.sendMessage(currentTabId, { action: 'relay-import-current-profile' });
-    acked = !!resp?.ok;
+    await chrome.tabs.sendMessage(currentTabId, { action: 'relay-import-current-profile' });
   } catch {
-    // Content script not present (page not fully loaded, or not an /in/ page).
-    importBtn.disabled = false;
-    importBtn.textContent = 'Import to Relay';
-    profileStatusText.textContent = 'Reload the profile, then try again';
+    importBtn.disabled = false; importBtn.textContent = 'Import to Relay';
+    progressEl.textContent = 'Reload the profile, then try again.';
     return;
   }
-  if (!acked) { /* still poll — capture may have started anyway */ }
-
-  // Poll status until the contact lands (capture runs async, ~5–20s).
   for (let i = 0; i < 14; i++) {
     await sleep(2000);
-    if (currentSlug !== slug) return; // user navigated away
-    const status = await fetchStatus(slug);
-    if (status?.exists) {
-      importBtn.innerHTML = 'Imported ✓';
-      await sleep(900);
-      importBtn.textContent = 'Re-import';
-      importBtn.disabled = false;
-      applyStatus(status);
-      return;
-    }
+    if (currentSlug !== slug) return;
+    const ctx = await fetchContext(slug);
+    if (ctx?.exists) { renderProfile(); return; }
   }
-  // Timed out — capture may still complete shortly.
-  importBtn.disabled = false;
-  importBtn.textContent = 'Import to Relay';
-  profileStatusText.textContent = 'Still importing… check Relay in a moment';
+  importBtn.disabled = false; importBtn.textContent = 'Import to Relay';
 });
+
+// ── Search Relay ─────────────────────────────────────────────────────────
+let searchTimer = null;
+searchInput.addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  const q = searchInput.value.trim();
+  if (q.length < 2) { searchResults.replaceChildren(); return; }
+  searchTimer = setTimeout(() => runSearch(q), 250);
+});
+async function runSearch(q) {
+  try {
+    const r = await fetch(`${RELAY}/api/contacts/search?q=${encodeURIComponent(q)}`, { signal: AbortSignal.timeout(4000) });
+    if (!r.ok) return;
+    const d = await r.json();
+    searchResults.replaceChildren();
+    const list = (d.contacts || []).slice(0, 8);
+    if (!list.length) { searchResults.append(h('div', { class: 'hint' }, 'No matches.')); return; }
+    for (const c of list) {
+      const url = c.profileUrl || (c.profileSlug ? `https://www.linkedin.com/in/${c.profileSlug}` : null);
+      const sub = [c.role || c.headline, c.company].filter(Boolean).join(' · ');
+      const row = h('div', { class: 'result' },
+        h('div', { class: 'result-name', text: c.name || 'Unknown' }),
+        sub ? h('div', { class: 'result-sub', text: sub }) : null,
+      );
+      if (url) row.addEventListener('click', () => chrome.tabs.create({ url }));
+      else row.style.opacity = '0.6';
+      searchResults.append(row);
+    }
+  } catch {}
+}
 
 // ── Sync (LinkedIn + Sales Navigator) ────────────────────────────────────
 function runSync(btn, idleLabel, action, payload, onResult) {
-  btn.disabled = true;
-  const otherDisabled = btn === syncBtn ? snSyncBtn : syncBtn;
-  otherDisabled.disabled = true;
-  btn.innerHTML = `${SYNC_ICON_RUNNING} Syncing…`;
+  const other = btn === syncBtn ? snSyncBtn : syncBtn;
+  btn.disabled = true; other.disabled = true;
+  btn.innerHTML = `${SYNC_RUN} Syncing…`;
   progressEl.textContent = '';
   chrome.runtime.sendMessage({ action, ...payload }, (response) => {
-    btn.disabled = false;
-    otherDisabled.disabled = false;
-    btn.innerHTML = `${SYNC_ICON_IDLE} ${idleLabel}`;
-    if (chrome.runtime.lastError) {
-      progressEl.textContent = 'Error: ' + chrome.runtime.lastError.message;
-      return;
-    }
+    btn.disabled = false; other.disabled = false;
+    btn.innerHTML = `${SYNC_IDLE} ${idleLabel}`;
+    if (chrome.runtime.lastError) { progressEl.textContent = 'Error: ' + chrome.runtime.lastError.message; return; }
     if (!response?.ok) {
       const reason = response?.reason ?? 'Unknown error';
       progressEl.textContent = 'Failed: ' + reason;
@@ -178,43 +262,29 @@ function runSync(btn, idleLabel, action, payload, onResult) {
       return;
     }
     onResult(response);
-    // Re-check the current profile in case the sync added it.
     renderProfile();
   });
 }
+syncBtn.addEventListener('click', () => runSync(syncBtn, 'Sync LinkedIn inbox', 'liInitialSyncApi', { deepFetch: true }, (r) => {
+  progressEl.textContent = `Synced ${r.convs ?? r.count ?? 0} conversations · ${r.msgs ?? r.messageCount ?? 0} messages`;
+}));
+snSyncBtn.addEventListener('click', () => runSync(snSyncBtn, 'Sync Sales Navigator', 'snFullSyncApi', {}, (r) => {
+  progressEl.textContent = `Synced ${r.threads ?? 0} SN threads · ${r.deepMsgs ?? 0} messages`;
+}));
 
-syncBtn.addEventListener('click', () => {
-  runSync(syncBtn, 'Sync LinkedIn inbox', 'liInitialSyncApi', { deepFetch: true }, (r) => {
-    const convs = r.convs ?? r.count ?? 0;
-    const msgs = r.msgs ?? r.messageCount ?? 0;
-    progressEl.textContent = `Synced ${convs} conversations · ${msgs} messages`;
-  });
-});
-snSyncBtn.addEventListener('click', () => {
-  runSync(snSyncBtn, 'Sync Sales Navigator', 'snFullSyncApi', {}, (r) => {
-    progressEl.textContent = `Synced ${r.threads ?? 0} SN threads · ${r.deepMsgs ?? 0} messages`;
-  });
-});
-
-// Live progress messages from the background service worker.
 chrome.runtime.onMessage.addListener((msg) => {
-  if (msg?.action === 'progress' && typeof msg.message === 'string') {
-    progressEl.textContent = msg.message;
-  }
+  if (msg?.action === 'progress' && typeof msg.message === 'string') progressEl.textContent = msg.message;
 });
 
-// ── React to tab changes so the profile section stays current ────────────
+// ── Keep profile section current as tabs change ──────────────────────────
 chrome.tabs.onActivated.addListener(() => renderProfile());
 chrome.tabs.onUpdated.addListener((tabId, info) => {
-  if (info.url || info.status === 'complete') {
-    getActiveTab().then((t) => { if (t && t.id === tabId) renderProfile(); });
-  }
+  if (info.url || info.status === 'complete') getActiveTab().then((t) => { if (t && t.id === tabId) renderProfile(); });
 });
 
 // ── Boot ─────────────────────────────────────────────────────────────────
-async function refresh() {
+(async function boot() {
   renderConnection(await checkConnection());
   await renderProfile();
-}
-refresh();
+})();
 setInterval(() => checkConnection().then(renderConnection), 8000);
