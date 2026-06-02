@@ -4,19 +4,14 @@
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 function injectScript() {
-  return new Promise((resolve) => {
-    if (document.getElementById('relay-injected')) return resolve();
-    const s = document.createElement('script');
-    s.id = 'relay-injected';
-    s.src = chrome.runtime.getURL('injected.js');
-    s.onload = () => resolve();
-    (document.head || document.documentElement).appendChild(s);
-  });
+  // injected.js is loaded natively via the manifest content_scripts entry
+  // (world:"MAIN", run_at:document_start) — so the fetch/XHR hook is already
+  // present before LinkedIn's first request. We deliberately do NOT inject it
+  // at runtime via chrome.runtime.getURL(): that requires a web_accessible_
+  // resource, which any page (incl. LinkedIn) can probe to fingerprint the
+  // extension. Kept as a resolved no-op for the legacy call sites below.
+  return Promise.resolve();
 }
-
-// Inject hook IMMEDIATELY (at document_start) so we catch LinkedIn's initial
-// fetches that happen before the user clicks Sync Now.
-injectScript();
 
 // Kick off passive auto-sync as soon as the page is interactive. The interval
 // itself is harmless (it no-ops when there's nothing new) and self-recovers if

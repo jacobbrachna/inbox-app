@@ -21,6 +21,11 @@
   // radius, weight 600 type, native-feeling shadow. IP tile preserved so
   // user knows it's our extension, not a LinkedIn feature.
   function setupBanner() {
+    // Compliance: no injected on-page UI. We never modify LinkedIn's DOM, so
+    // their page-scan detection finds nothing. `banner` stays null and every
+    // updater below guards on it, so capture proceeds invisibly.
+    return;
+    // eslint-disable-next-line no-unreachable
     try {
       const style = document.createElement('style');
       style.textContent = `
@@ -837,6 +842,11 @@
   // like a LinkedIn primary action button: filled LinkedIn blue, pill
   // shape, weight 600, native shadow. IP avatar tile preserves brand identity.
   function showFloatingButton() {
+    // Compliance: no injected on-page UI. The floating "Import to Relay" pill
+    // is removed — strangers are no longer captured by click. Messageable
+    // contacts still capture silently via the network tap.
+    return;
+    // eslint-disable-next-line no-unreachable
     try {
       if (document.getElementById('relay-floating-btn')) return;
       if (!document.getElementById('relay-floating-btn-style')) {
@@ -897,6 +907,10 @@
   // that Relay just updated their data without the more visible banner.
   // Auto-dismisses; can stack if user navigates between profiles quickly.
   function showSilentToast(data) {
+    // Compliance: no injected on-page UI. The "Refreshed by Relay" toast is
+    // removed — capture stays fully silent, no DOM changes on LinkedIn pages.
+    return;
+    // eslint-disable-next-line no-unreachable
     try {
       if (!document.getElementById('relay-silent-toast-style')) {
         const style = document.createElement('style');

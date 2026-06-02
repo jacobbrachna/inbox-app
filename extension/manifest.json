@@ -10,12 +10,6 @@
     "128": "icons/128.png"
   },
   "permissions": ["cookies", "storage", "tabs", "scripting", "activeTab", "notifications", "alarms"],
-  "web_accessible_resources": [
-    {
-      "resources": ["injected.js"],
-      "matches": ["*://*.linkedin.com/*"]
-    }
-  ],
   "host_permissions": [
     "*://*.linkedin.com/*",
     "http://localhost:3030/*"
@@ -44,16 +38,6 @@
     {
       "matches": ["*://www.linkedin.com/in/*"],
       "js": ["profile-capture.js"],
-      "run_at": "document_idle"
-    },
-    {
-      "matches": ["*://www.linkedin.com/mynetwork/invite-connect/connections/*"],
-      "js": ["harvest-button.js"],
-      "run_at": "document_idle"
-    },
-    {
-      "matches": ["*://www.linkedin.com/sales/*"],
-      "js": ["sn-sync-button.js"],
       "run_at": "document_idle"
     },
     {
