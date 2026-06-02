@@ -1,4 +1,10 @@
 const INBOXPRO_URL = 'http://localhost:3030';
+
+// Clicking the toolbar icon opens Relay's native side panel (its primary
+// surface — lives in Chrome's own frame, never injected into linkedin.com).
+try {
+  chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true }).catch(() => {});
+} catch {}
 const INBOXPRO_WS_URL = 'ws://127.0.0.1:3030/ws';
 
 // ── WS connection to the Electron broker ───────────────────────────────────

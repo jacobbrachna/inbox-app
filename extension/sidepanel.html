@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <style>
+    :root {
+      --bg: #F4F4F5;
+      --card: #FFFFFF;
+      --card-hover: #FAFAFA;
+      --surface: #F1F1F1;
+      --hairline: #E5E5E5;
+      --text-primary: #18181B;
+      --text-secondary: #52525B;
+      --text-tertiary: #71717A;
+      --text-muted: #A1A1AA;
+      --accent: #2563EB;
+      --accent-soft: rgba(37, 99, 235, 0.10);
+      --accent-deep: #1D4ED8;
+      --accent-fg: #1E3A8A;
+      --danger: #DC2626;
+      --success: #16A34A;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 1px 3px rgba(0, 0, 0, 0.04);
+      --ease: cubic-bezier(0.25, 1, 0.5, 1);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0A0A0A; --card: #161616; --card-hover: #1E1E1E; --surface: #1A1A1A;
+        --hairline: #262626; --text-primary: #FAFAFA; --text-secondary: #D4D4D4;
+        --text-tertiary: #A1A1A1; --text-muted: #71717A; --accent: #3B82F6;
+        --accent-soft: rgba(59, 130, 246, 0.16); --accent-deep: #2563EB;
+        --accent-fg: #BFDBFE; --danger: #F87171; --success: #34D399;
+        --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.2);
+      }
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      min-height: 100vh;
+      padding: 16px;
+      background: var(--bg);
+      color: var(--text-primary);
+      font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', system-ui, sans-serif;
+      font-size: 13px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── Header ── */
+    .header { display: flex; align-items: center; gap: 11px; margin-bottom: 16px; }
+    .logo-tile {
+      width: 34px; height: 34px; border-radius: 9px; flex-shrink: 0;
+      background: #000; display: flex; align-items: center; justify-content: center;
+      overflow: hidden;
+    }
+    .logo-tile img { width: 34px; height: 34px; display: block; }
+    .logo-title { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
+    .logo-sub {
+      font-size: 10px; color: var(--text-tertiary); letter-spacing: 0.04em;
+      text-transform: uppercase; margin-top: 2px; font-weight: 500;
+      display: inline-flex; align-items: center; gap: 5px;
+    }
+    .conn-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--text-muted); }
+    .conn-dot.on { background: var(--success); }
+    .conn-dot.off { background: var(--danger); }
+
+    /* ── Section ── */
+    .section { margin-bottom: 16px; }
+    .section-label {
+      font-size: 10px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+      color: var(--text-muted); margin-bottom: 8px; padding-left: 2px;
+    }
+
+    .card {
+      background: var(--card); border: 1px solid var(--hairline); border-radius: 12px;
+      padding: 14px; box-shadow: var(--shadow);
+    }
+
+    /* ── Profile card ── */
+    .profile-name { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.3; }
+    .profile-headline {
+      font-size: 11.5px; color: var(--text-tertiary); margin-top: 3px; line-height: 1.4;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    }
+    .profile-status {
+      display: inline-flex; align-items: center; gap: 5px; margin-top: 10px;
+      font-size: 11px; font-weight: 500; color: var(--text-secondary);
+      padding: 3px 8px; border-radius: 999px; background: var(--surface);
+    }
+    .profile-status.in { color: var(--success); background: rgba(22,163,74,0.10); }
+    .profile-status .pip { width: 5px; height: 5px; border-radius: 999px; background: currentColor; }
+    .empty {
+      color: var(--text-tertiary); font-size: 12px; line-height: 1.5; text-align: center;
+      padding: 18px 8px;
+    }
+    .empty strong { color: var(--text-secondary); font-weight: 600; }
+
+    /* ── Buttons ── */
+    .btn {
+      width: 100%; padding: 10px 14px; background: var(--accent-deep); color: white;
+      border: none; border-radius: 10px; font-size: 13px; font-weight: 600;
+      letter-spacing: -0.005em; cursor: pointer; display: flex; align-items: center;
+      justify-content: center; gap: 6px; transition: all 160ms var(--ease); font-family: inherit;
+    }
+    .btn:hover:not(:disabled) { background: var(--accent); transform: translateY(-1px); }
+    .btn:active:not(:disabled) { transform: scale(0.98); }
+    .btn:disabled { background: var(--surface); color: var(--text-muted); cursor: not-allowed; }
+    .btn.secondary {
+      background: var(--card); color: var(--text-primary); border: 1px solid var(--hairline);
+    }
+    .btn.secondary:hover:not(:disabled) { background: var(--card-hover); border-color: var(--text-muted); }
+    .btn.small { padding: 8px 12px; font-size: 12px; margin-top: 12px; }
+    .btn + .btn { margin-top: 8px; }
+
+    .progress {
+      margin-top: 8px; font-size: 11px; color: var(--text-tertiary); text-align: center;
+      min-height: 14px; font-family: ui-monospace, SFMono-Regular, monospace;
+    }
+    .hint { margin-top: 10px; font-size: 10.5px; color: var(--text-muted); text-align: center; line-height: 1.45; }
+
+    .footer {
+      margin-top: 6px; padding-top: 12px; border-top: 1px solid var(--hairline);
+      display: flex; justify-content: center;
+    }
+    .footer a {
+      color: var(--accent); text-decoration: none; font-size: 11.5px; font-weight: 500;
+      display: inline-flex; align-items: center; gap: 4px;
+    }
+    .footer a:hover { color: var(--accent-deep); }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spin { animation: spin 0.9s linear infinite; }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <div class="logo-tile"><img src="icons/128.png" alt="Relay"></div>
+    <div>
+      <div class="logo-title">Relay</div>
+      <div class="logo-sub"><span class="conn-dot" id="connDot"></span><span id="connText">Connecting…</span></div>
+    </div>
+  </div>
+
+  <!-- On this profile -->
+  <div class="section">
+    <div class="section-label">On this profile</div>
+    <div class="card" id="profileCard">
+      <div class="empty" id="profileEmpty">
+        Open someone&rsquo;s <strong>LinkedIn profile</strong> to import them into Relay.
+      </div>
+      <div class="hidden" id="profileBody">
+        <div class="profile-name" id="profileName">—</div>
+        <div class="profile-headline" id="profileHeadline"></div>
+        <div class="profile-status" id="profileStatus"><span class="pip"></span><span id="profileStatusText">Checking…</span></div>
+        <button class="btn small" id="importBtn">Import to Relay</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sync -->
+  <div class="section">
+    <div class="section-label">Sync inbox</div>
+    <button class="btn" id="syncBtn">
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
+        <polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline>
+        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+      </svg>
+      Sync LinkedIn inbox
+    </button>
+    <button class="btn secondary" id="snSyncBtn">
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
+        <polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline>
+        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+      </svg>
+      Sync Sales Navigator
+    </button>
+    <div class="progress" id="progress"></div>
+    <div class="hint" id="hint">Make sure the Relay app is running.</div>
+  </div>
+
+  <div class="footer">
+    <a href="http://localhost:3030" target="_blank">Open Relay
+      <svg width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
+        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+        <polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line>
+      </svg>
+    </a>
+  </div>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>

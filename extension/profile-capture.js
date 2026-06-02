@@ -1266,5 +1266,19 @@
   window.addEventListener('popstate', () => setTimeout(onPossibleUrlChange, 0));
   setInterval(onPossibleUrlChange, 800);
 
+  // On-demand import from the Relay side panel. The user explicitly clicked
+  // "Import to Relay" in the browser sidebar, so we capture the profile already
+  // rendered in this tab — silently, in place (no new tab, no on-page UI).
+  try {
+    chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+      if (msg && msg.action === 'relay-import-current-profile') {
+        sent = false;
+        startCapture({ silent: true });
+        sendResponse({ ok: true, slug: location.pathname.match(/^\/in\/([^/?#]+)/)?.[1] || '' });
+      }
+      return false;
+    });
+  } catch {}
+
   bootstrap();
 })();
