@@ -80,9 +80,11 @@ async function readProfileDisplay(tabId) {
     return res?.result || { name: '', headline: '' };
   } catch { return { name: '', headline: '' }; }
 }
-async function fetchContext(slug) {
+async function fetchContext(slug, name) {
   try {
-    const r = await fetch(`${RELAY}/api/contacts/by-slug/${encodeURIComponent(slug)}/context`, { signal: AbortSignal.timeout(4000) });
+    const u = `${RELAY}/api/contacts/by-slug/${encodeURIComponent(slug)}/context`
+      + (name ? `?name=${encodeURIComponent(name)}` : '');
+    const r = await fetch(u, { signal: AbortSignal.timeout(4000) });
     if (r.ok) return await r.json();
   } catch {}
   return null;
@@ -101,7 +103,11 @@ async function renderProfile() {
   if (!slug) { profileBody.classList.add('hidden'); profileEmpty.classList.remove('hidden'); return; }
   profileEmpty.classList.add('hidden'); profileBody.classList.remove('hidden');
 
-  const [ctx, page] = await Promise.all([fetchContext(slug), readProfileDisplay(tab.id)]);
+  // Read the page name first so the context lookup can fall back to name-match
+  // (most contacts have no slug stored — they came from message sync).
+  const page = await readProfileDisplay(tab.id);
+  if (currentSlug !== slug) return;
+  const ctx = await fetchContext(slug, page.name);
   if (currentSlug !== slug) return; // navigated away mid-fetch
 
   const c = ctx?.contact;
@@ -239,7 +245,7 @@ importBtn.addEventListener('click', async () => {
   for (let i = 0; i < 5; i++) {
     await sleep(800);
     if (currentSlug !== slug) return;
-    const ctx = await fetchContext(slug);
+    const ctx = await fetchContext(slug, info.name);
     if (ctx?.exists) { renderProfile(); return; }
   }
   renderProfile();
