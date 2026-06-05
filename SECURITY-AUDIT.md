@@ -9,6 +9,17 @@ Good news up front (explicitly cleared): no secret leakage via GET, no SQL injec
 
 ---
 
+## FIX STATUS (updated 2026-06-04)
+- ✅ **C1 CRITICAL — FIXED + verified** (`3830e01`): Origin allowlist on the `:3030` HTTP listener + `/ws` (`isAllowedOrigin`). Only `chrome-extension://`, `www.linkedin.com`, `app://`, absent/null allowed → every other website 403. Live-verified `evil.com → 403` on `/api/state` + `POST /api/reset`.
+- ✅ **C2/residual — substantially mitigated** (`<this commit>`): instead of a bearer token, the `:3030` listener now **hard-blocks the UI-only/destructive endpoints the extension never calls** — `reset`, `ai/key`, `export`, `raw`, `repair-attribution`, `diagnostics` → 403. So even a script on linkedin.com (allowed Origin) or a local process cannot wipe the DB, overwrite the API key, or bulk-export. The WS Origin gate was tightened to extension+app only (dropped linkedin.com). `content.js` window-message handlers now check `ev.source === window` (blocks cross-frame postMessage injection).
+- ✅ **H1 SSRF / M1 path-traversal / M2 sandbox — FIXED** (`47b9da5`): icp/build host validation (+ per-redirect), `app://` STATIC_DIR containment, BrowserWindow `sandbox:true`.
+
+**Why no bearer token (conscious decision):** the denylist protects the high-severity outcomes (wipe/overwrite/export) against *all* `:3030` callers with zero breakage — better than a token, which a local process sidesteps anyway (it can read the SQLite file directly). The remaining residual is *data poisoning of your own import by a script already executing on linkedin.com* — narrow (requires LinkedIn compromise or another malicious extension), low-severity (garbage data, not exfil/destruction). Threading a token through every content-script capture fetch is high-breakage for that narrow gain, so it's deferred.
+
+**Still genuinely open (low priority):** M2 CSP remainder (no UI innerHTML sink for synced data — React escapes; low value, breakage-prone), M3 shipped ZoomInfo client_secret (inherent to a confidential OAuth client shipped to users — needs PKCE/broker), M5 `tabs` permission minimization, dep advisories (breaking bumps).
+
+---
+
 ## CRITICAL
 
 ### C1 — Unauthenticated, wildcard-CORS local API (`:3030`)

@@ -267,7 +267,7 @@ function scheduleFullSync() {
 // LinkedIn ever moves messaging back to main-context JS, this will start firing
 // automatically.
 window.addEventListener('message', (ev) => {
-  if (!ev.data || !ev.data.__inboxproRealtime) return;
+  if (ev.source !== window || !ev.data || !ev.data.__inboxproRealtime) return;
   const urns = Array.isArray(ev.data.convUrns) ? ev.data.convUrns : [];
   const snUrns = Array.isArray(ev.data.snUrns) ? ev.data.snUrns : [];
   const source = ev.data.source || 'li';
@@ -294,7 +294,7 @@ window.addEventListener('message', (ev) => {
 
 // WebSocket outbound captures — useful for discovering payloads (e.g. SN typing)
 window.addEventListener('message', (ev) => {
-  if (!ev.data || !ev.data.__inboxproWsSend) return;
+  if (ev.source !== window || !ev.data || !ev.data.__inboxproWsSend) return;
   fetch('http://localhost:3030/api/sync-log', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -311,7 +311,7 @@ window.addEventListener('message', (ev) => {
 // inbox after these, so we trigger an immediate snRefreshNow to mirror the
 // state into Relay within seconds rather than waiting for the next poll.
 window.addEventListener('message', (ev) => {
-  if (!ev.data || !ev.data.__inboxproSnAction) return;
+  if (ev.source !== window || !ev.data || !ev.data.__inboxproSnAction) return;
   fetch('http://localhost:3030/api/sync-log', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -370,7 +370,7 @@ window.addEventListener('message', (ev) => {
 
 // ── Listen to intercepted responses ────────────────────────────────────────────
 window.addEventListener('message', (ev) => {
-  if (!ev.data || !ev.data.__inboxproIntercept) return;
+  if (ev.source !== window || !ev.data || !ev.data.__inboxproIntercept) return;
   const url = ev.data.url || '';
 
   if (url.includes('messengerMessages.') && !messageURLPatterns.includes(url)) {

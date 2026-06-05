@@ -376,6 +376,29 @@ function isAllowedOrigin(origin) {
   return false;
 }
 
+// Defense-in-depth: the extension NEVER calls these UI-only / destructive
+// endpoints (verified), so block them on the :3030 channel entirely. Even a
+// script running on linkedin.com (an allowed Origin) or a local process cannot
+// wipe the DB, overwrite the Anthropic key, or bulk-export your data through
+// this listener. The app's own UI reaches these via the trusted app:// path.
+const EXT_BLOCKED_PATHS = ['/api/reset', '/api/ai/key', '/api/export', '/api/raw', '/api/repair-attribution', '/api/diagnostics'];
+function isExtBlockedPath(rawUrl) {
+  const p = rawUrl.split('?')[0].replace(/\/+$/, '');
+  return EXT_BLOCKED_PATHS.some((b) => p === b || p.startsWith(b + '/'));
+}
+
+// The WS broker is only ever used by the extension worker (chrome-extension://)
+// and the app renderer (app:// / null) — content scripts on linkedin.com use
+// HTTP, never the socket. So keep the WS Origin gate tighter than HTTP's: a
+// linkedin.com page must not be able to open the broker and inject/intercept
+// renderer↔extension traffic.
+function isAllowedWsOrigin(origin) {
+  if (!origin || origin === 'null') return true;
+  if (origin.startsWith('chrome-extension://')) return true;
+  if (origin.startsWith('app://')) return true;
+  return false;
+}
+
 function startExtensionListener() {
   const server = http.createServer(async (req, res) => {
     try {
@@ -389,6 +412,12 @@ function startExtensionListener() {
         log(`ext listener: blocked origin ${req.headers.origin} for ${req.method} ${url}`);
         res.writeHead(403, { 'Content-Type': 'text/plain', 'access-control-allow-origin': '*' });
         res.end('Forbidden origin');
+        return;
+      }
+      if (isExtBlockedPath(url)) {
+        log(`ext listener: blocked UI-only path ${req.method} ${url}`);
+        res.writeHead(403, { 'Content-Type': 'text/plain', 'access-control-allow-origin': '*' });
+        res.end('Forbidden');
         return;
       }
       const chunks = [];
@@ -479,7 +508,7 @@ function startExtensionListener() {
   server.on('upgrade', (req, socket, head) => {
     // Same Origin gate as the HTTP API — a web page must not be able to open
     // the broker socket and inject/intercept renderer↔extension messages.
-    if (req.url === '/ws' && isAllowedOrigin(req.headers.origin)) {
+    if (req.url === '/ws' && isAllowedWsOrigin(req.headers.origin)) {
       wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
     } else {
       socket.destroy();
