@@ -334,6 +334,13 @@ function registerAppProtocol() {
     // Static files. Strip leading slash and normalize to STATIC_DIR.
     // Next.js's static export hashes filenames so all of /_next/* is safe.
     let filePath = path.join(STATIC_DIR, pathname);
+    // SECURITY: block path traversal — `path.join` normalizes `..`, but a
+    // crafted pathname could still resolve outside STATIC_DIR. Reject anything
+    // that escapes the static root before we touch the filesystem.
+    const staticRoot = path.resolve(STATIC_DIR);
+    if (filePath !== staticRoot && !path.resolve(filePath).startsWith(staticRoot + path.sep)) {
+      return new Response('Forbidden', { status: 403 });
+    }
     // SPA fallback — non-file paths get index.html.
     if (!pathname.includes('.') && !fs.existsSync(filePath)) {
       filePath = path.join(STATIC_DIR, 'index.html');
@@ -518,6 +525,9 @@ if (!gotTheLock) {
       webPreferences: {
         contextIsolation: true,
         nodeIntegration: false,
+        // Sandbox the renderer (we ship no preload, so nothing depends on a
+        // non-sandboxed renderer). Defense-in-depth against a renderer compromise.
+        sandbox: true,
       },
     });
     // DevTools is opt-in via env var. Even in dev we don't want it popping

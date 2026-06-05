@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { lookup } from 'dns/promises';
 import { prisma } from '@/lib/db';
 import { CORS, optionsResponse } from '@/lib/api-utils';
 import { requireAnthropic, MODELS } from '@/lib/ai';
@@ -69,18 +70,69 @@ function extractText(html: string): string {
     .slice(0, 12_000);
 }
 
-async function fetchSite(url: string): Promise<string | null> {
-  try {
-    const r = await fetch(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Relay/1.0' },
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!r.ok) return null;
-    const html = await r.text();
-    return extractText(html);
-  } catch {
-    return null;
+// ── SSRF guard ──────────────────────────────────────────────────────────
+// fetchSite pulls a user-supplied URL server-side, so a caller could aim it at
+// internal services (cloud metadata 169.254.169.254, localhost, RFC1918). Block
+// non-http(s) schemes and any host that resolves to a private/loopback/link-local
+// address — re-validated on every redirect hop. (DNS-rebinding TOCTOU is a known
+// residual; this stops the direct + redirect SSRF vectors.)
+function isPrivateIp(ip: string): boolean {
+  const m = ip.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (m) {
+    const a = Number(m[1]), b = Number(m[2]);
+    if (a === 0 || a === 10 || a === 127) return true;
+    if (a === 169 && b === 254) return true;        // link-local / cloud metadata
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT
+    return false;
   }
+  const lo = ip.toLowerCase();
+  if (lo === '::1' || lo === '::') return true;
+  if (lo.startsWith('fe80') || lo.startsWith('fc') || lo.startsWith('fd')) return true;
+  if (lo.startsWith('::ffff:')) return isPrivateIp(lo.slice(7));
+  return false;
+}
+
+async function assertSafeUrl(raw: string): Promise<string | null> {
+  let u: URL;
+  try { u = new URL(raw); } catch { return null; }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+  const host = u.hostname.toLowerCase();
+  if (host === 'localhost' || host.endsWith('.local') || host.endsWith('.internal')) return null;
+  if (/^[\d.]+$/.test(host) || host.includes(':')) {
+    return isPrivateIp(host) ? null : u.toString();
+  }
+  try {
+    const addrs = await lookup(host, { all: true });
+    if (!addrs.length || addrs.some((a) => isPrivateIp(a.address))) return null;
+  } catch { return null; }
+  return u.toString();
+}
+
+async function fetchSite(rawUrl: string): Promise<string | null> {
+  let current = rawUrl;
+  for (let hop = 0; hop < 4; hop++) {
+    const safe = await assertSafeUrl(current);
+    if (!safe) return null;
+    let r: Response;
+    try {
+      r = await fetch(safe, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Relay/1.0' },
+        redirect: 'manual',
+        signal: AbortSignal.timeout(8000),
+      });
+    } catch { return null; }
+    if (r.status >= 300 && r.status < 400) {
+      const loc = r.headers.get('location');
+      if (!loc) return null;
+      current = new URL(loc, safe).toString(); // re-validate the redirect target next hop
+      continue;
+    }
+    if (!r.ok) return null;
+    return extractText(await r.text());
+  }
+  return null; // too many redirects
 }
 
 export async function POST(req: NextRequest) {
