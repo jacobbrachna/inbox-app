@@ -397,8 +397,8 @@ function SignInStep({ extensionReady, onSynced }: { extensionReady: boolean; onS
         {syncing ? 'Syncing…' : syncDone ? 'Re-sync' : 'Start sync'}
       </button>
 
-      {/* Live progress card. The parent wizard auto-advances once
-          conversations.length > 0, so this is mostly a confidence builder. */}
+      {/* Live progress card. On a successful sync we call onSynced() to advance
+          (see the message handler above) — this card is the visible confirmation. */}
       {(syncing || syncDone || syncError) && (
         <div
           key={syncError ? 'err' : syncDone ? 'done' : 'in-progress'}

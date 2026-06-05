@@ -20,18 +20,13 @@ export async function POST(req: Request) {
 
   // Cascade delete is configured on Message → Conversation. Deleting
   // conversations removes all messages automatically.
-  const ops: Parameters<typeof prisma.$transaction>[0] = [
+  const ops = [
     prisma.message.deleteMany({}),
     prisma.conversation.deleteMany({}),
+    ...(resetProfile
+      ? [prisma.appState.update({ where: { id: 1 }, data: { myProfileUrn: '', profileName: '' } })]
+      : []),
   ];
-  if (resetProfile) {
-    ops.push(
-      prisma.appState.update({
-        where: { id: 1 },
-        data: { myProfileUrn: '', profileName: '' },
-      }),
-    );
-  }
   const results = await prisma.$transaction(ops);
   const msgsDeleted = results[0] as { count: number };
   const convsDeleted = results[1] as { count: number };

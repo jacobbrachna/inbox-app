@@ -150,10 +150,9 @@ function buildRouteIndex() {
 }
 
 function loadHandler(route) {
-  if (handlerCache.has(route)) return handlerCache.get(route);
   if (!routeIndex) routeIndex = buildRouteIndex();
   let file = routeIndex.static.get(route);
-  let params = {};
+  const params = {};
   if (!file) {
     for (const d of routeIndex.dynamic) {
       const m = route.match(d.regex);
@@ -171,14 +170,14 @@ function loadHandler(route) {
       }
     }
   }
-  if (!file) {
-    handlerCache.set(route, null);
-    return null;
-  }
-  const mod = require(file);
-  const entry = { mod, params };
-  handlerCache.set(route, entry);
-  return entry;
+  if (!file) return null;
+  // Cache the required module keyed by FILE (bounded by the number of route
+  // files), and compute params fresh per call. Caching by the concrete route
+  // (with the slug/URN value baked in) leaked a handlerCache entry for every
+  // distinct id ever requested.
+  let mod = handlerCache.get(file);
+  if (!mod) { mod = require(file); handlerCache.set(file, mod); }
+  return { mod, params };
 }
 
 async function dispatchApi(method, url, body, headers) {
@@ -187,7 +186,8 @@ async function dispatchApi(method, url, body, headers) {
   // so a trailing "?..." would miss every match. Keep the full url (with query)
   // on the Request so handlers can still read the params.
   const pathname = url.split('?')[0].replace(/^\/api\//, '');
-  log(`api ${method} ${url}`);
+  // Log the path only — query strings carry PII (profile URNs, search terms).
+  log(`api ${method} /api/${pathname}`);
   const entry = loadHandler(pathname);
   if (!entry) {
     log(`api 404 ${pathname}`);
@@ -584,7 +584,12 @@ if (!gotTheLock) {
       log('loadURL threw:', e?.message || e);
     }
     mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-      shell.openExternal(url);
+      // Only hand safe schemes to the OS — a stored-XSS in the renderer must
+      // not be able to trigger file:// or custom-scheme handlers via window.open.
+      try {
+        const proto = new URL(url).protocol;
+        if (proto === 'http:' || proto === 'https:' || proto === 'mailto:') shell.openExternal(url);
+      } catch { /* malformed URL — ignore */ }
       return { action: 'deny' };
     });
   }

@@ -70,9 +70,14 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ slug: strin
       take: 12,
     });
     const exact = candidates.filter((c) => norm(c.name) === norm(name));
-    // Prefer the candidate with the most conversations (most relevant match).
-    exact.sort((a, b) => b.conversations.length - a.conversations.length);
-    contact = exact[0] ?? null;
+    if (exact.length === 1) {
+      contact = exact[0];
+    } else if (exact.length > 1) {
+      // Same name, multiple people — don't guess and risk showing the wrong
+      // person's threads. Only match if exactly one of them has a conversation.
+      const withConvs = exact.filter((c) => c.conversations.length > 0);
+      contact = withConvs.length === 1 ? withConvs[0] : null;
+    }
     matchedBy = 'name';
   }
 

@@ -576,7 +576,9 @@ export const useStore = create<AppState>()((set, get) => ({
     // moved forward).
     let lastSeenMap: Record<string, number> = {};
     for (const c of get().conversations) {
-      lastSeenMap[c.id] = new Date(c.lastMessageAt).getTime();
+      // `|| 0` guards against an invalid lastMessageAt → NaN, which would make
+      // the change-detection comparison below silently never fire for that row.
+      lastSeenMap[c.id] = new Date(c.lastMessageAt).getTime() || 0;
     }
 
     const tick = async () => {
@@ -632,7 +634,7 @@ export const useStore = create<AppState>()((set, get) => ({
           // Update baseline from the now-fresh store state
           const fresh: Record<string, number> = {};
           for (const c of get().conversations) {
-            fresh[c.id] = new Date(c.lastMessageAt).getTime();
+            fresh[c.id] = new Date(c.lastMessageAt).getTime() || 0;
           }
           lastSeenMap = fresh;
         } else {

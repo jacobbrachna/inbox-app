@@ -241,6 +241,11 @@ importBtn.addEventListener('click', async () => {
     progressEl.textContent = 'Import failed — is the Relay app running?';
     return;
   }
+  // Best-effort: also ask the content script to do the rich in-page scrape
+  // (About / Experience / Education / Posts). The thin POST above already
+  // guaranteed name + slug landed; this enriches when the content script is
+  // present on the tab. Silently ignored if it isn't.
+  try { await chrome.tabs.sendMessage(currentTabId, { action: 'relay-import-current-profile' }); } catch {}
   // The capture write is synchronous; re-check a couple times to be safe.
   for (let i = 0; i < 5; i++) {
     await sleep(800);
