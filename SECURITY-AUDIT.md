@@ -67,10 +67,9 @@ Covered under C1, called out separately: a cross-origin POST can wipe the DB. Th
 - `shell.openExternal(url)` with no scheme allowlist (`main.js` setWindowOpenHandler). Restrict to http/https/mailto.
 - macOS auto-update integrity depends on every release being signed+notarized (they are — verify it stays that way).
 
-## Dependencies (`npm audit`: 5 moderate)
-- `@hono/node-server` (middleware bypass via repeated slashes) — via `@prisma/dev` → `prisma`.
-- `postcss` (XSS in stringify) — via `next`.
-- Both fixes require **breaking** major bumps (`prisma@6`, `next@9`?? — likely a mis-resolve). **Defer**; neither is in the runtime hot path (dev/build tooling). Re-evaluate on the next dependency upgrade pass.
+## Dependencies — addressed 2026-06-05 (commit `d7fe46e`)
+- ✅ **Resolved via `overrides`** (npm wanted to *downgrade* Next→9 / Prisma→6 — wrong): `postcss ^8.5.15` (was next's bundled 8.4.31, XSS in stringify), `@hono/node-server ^2.0.4` + `hono ^4.12.23` (via `@prisma/dev`, the local dev server we never run), and `tmp → 0.2.6` via `npm audit fix` (via electron-builder, build-time, path-traversal HIGH). All are build/dev tooling — none ship in the runtime app.
+- ⏸️ **`electron` 33→42 (HIGH) — DEFERRED, hard-blocked.** Electron 42's newer V8 breaks the native `better-sqlite3` rebuild (`SetNativeDataProperty` ambiguous + missing `tag` arg in `helpers.cpp`/`addon.cpp`); better-sqlite3 12.x has no build for it, and 12.10.0 doesn't fix it. Needs a coordinated bump (a better-sqlite3 release supporting newer Electron V8, re-verify the Prisma adapter + full app behavior). **Low practical risk for this app:** the renderer only ever loads its own `app://` UI (sandboxed + contextIsolation), never untrusted web content — Chromium CVEs need malicious page content to exploit. Revisit when better-sqlite3 supports Electron 37+/42.
 
 ## Explicitly cleared (no action)
 - No GET returns the Anthropic key or ZoomInfo tokens (`/api/ai/key` GET → `{hasKey, mask}`; zoominfo status → no tokens; `/api/state` → no secrets).
