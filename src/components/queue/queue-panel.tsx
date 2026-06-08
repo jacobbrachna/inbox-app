@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useState, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Flame, AlertTriangle, Snowflake, Moon, ChevronRight, RefreshCw,
   Sparkles, MoreHorizontal, Star, BellOff, Clock, Handshake,
@@ -92,7 +93,23 @@ async function patchConversation(id: string, patch: Record<string, unknown>) {
 
 function RowMenu({ item, onMutate }: { item: QueueItem; onMutate: () => void }) {
   const [open, setOpen] = useState(false);
+  // Menu position (viewport coords) — it renders in a portal on document.body
+  // so the queue card's overflow-y-auto can't clip it and it sits above all.
+  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+
+  function openMenu() {
+    const r = triggerRef.current?.getBoundingClientRect();
+    if (r) setPos({ top: r.bottom + 4, right: window.innerWidth - r.right });
+    setOpen(true);
+  }
+  // Close on scroll — a fixed menu would otherwise detach from its row.
+  useEffect(() => {
+    if (!open) return;
+    const close = () => setOpen(false);
+    window.addEventListener('scroll', close, true);
+    return () => window.removeEventListener('scroll', close, true);
+  }, [open]);
 
   async function dismiss() {
     setOpen(false);
@@ -118,22 +135,23 @@ function RowMenu({ item, onMutate }: { item: QueueItem; onMutate: () => void }) 
   }
 
   return (
-    <div className="relative" onClick={(e) => e.stopPropagation()}>
+    <div onClick={(e) => e.stopPropagation()}>
       <button
         ref={triggerRef}
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => (open ? setOpen(false) : openMenu())}
         className="w-7 h-7 flex items-center justify-center rounded-md text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-card-hover)]"
         style={{ transition: 'all 140ms var(--ease-out-quart)' }}
         title="More actions"
       >
         <MoreHorizontal className="w-4 h-4" />
       </button>
-      {open && (
+      {open && pos && createPortal(
         <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="fixed inset-0 z-[200]" onClick={() => setOpen(false)} />
           <div
-            className="menu-in absolute right-0 mt-1 z-50 bg-[var(--color-card)] border border-[var(--color-hairline)] rounded-xl w-56 py-1 overflow-hidden"
-            style={{ boxShadow: 'var(--shadow-raised)' }}
+            className="menu-in fixed z-[201] bg-[var(--color-card)] border border-[var(--color-hairline)] rounded-xl w-56 py-1 overflow-hidden"
+            style={{ top: pos.top, right: pos.right, boxShadow: 'var(--shadow-raised)' }}
+            onClick={(e) => e.stopPropagation()}
           >
             <button
               onClick={toggleIcp}
@@ -171,7 +189,8 @@ function RowMenu({ item, onMutate }: { item: QueueItem; onMutate: () => void }) 
               </button>
             ))}
           </div>
-        </>
+        </>,
+        document.body,
       )}
     </div>
   );
