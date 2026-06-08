@@ -137,17 +137,26 @@ export function Sidebar() {
   const currentRoleLabel = useStore((s) => s.currentRoleLabel);
   const setCurrentRoleMeta = useStore((s) => s.setCurrentRoleMeta);
 
-  // Hydrate current-role meta from /api/patterns once. That endpoint
-  // already derives windowStart/windowEntry from myEmploymentHistory —
-  // reusing it avoids duplicating the date-parsing here.
+  // Hydrate current-role meta from /api/patterns. That endpoint derives
+  // windowStart/windowEntry from myEmploymentHistory. We POLL (not fetch-once)
+  // so the "current era" toggle appears within a few seconds AFTER the user
+  // refreshes their LinkedIn profile — without needing an app restart.
   useEffect(() => {
     if (currentRoleStart) return;
-    fetch('/api/patterns')
-      .then((r) => r.json())
-      .then((d) => {
-        if (d?.windowStart) setCurrentRoleMeta(d.windowStart, d.windowEntry?.company ?? null);
-      })
-      .catch(() => {});
+    let cancelled = false;
+    let tries = 0;
+    const poll = () => {
+      fetch('/api/patterns')
+        .then((r) => r.json())
+        .then((d) => {
+          if (cancelled) return;
+          if (d?.windowStart) { setCurrentRoleMeta(d.windowStart, d.windowEntry?.company ?? null); return; }
+          if (tries++ < 24) setTimeout(poll, 5000); // retry ~2 min
+        })
+        .catch(() => { if (!cancelled && tries++ < 24) setTimeout(poll, 5000); });
+    };
+    poll();
+    return () => { cancelled = true; };
   }, [currentRoleStart, setCurrentRoleMeta]);
 
   // Click "New message" → server creates an empty draft Conversation row,

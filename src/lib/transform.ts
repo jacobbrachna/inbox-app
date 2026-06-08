@@ -82,7 +82,7 @@ function resolveUrn(v: unknown, ctx?: TransformContext): unknown {
   return ctx.entities[v] ?? v;
 }
 
-function extractParticipant(p: unknown, ctx?: TransformContext): Participant | null {
+export function extractParticipant(p: unknown, ctx?: TransformContext): Participant | null {
   const resolved = typeof p === 'string' ? resolveUrn(p, ctx) : p;
   const original = obj(resolved);
   if (!original) {

@@ -168,8 +168,9 @@ button, a, input, textarea, select, [role="button"], [contenteditable="true"] {
 }
 
 ::selection {
-  background: var(--color-accent-soft);
-  color: var(--color-accent-fg);
+  /* A clearly-visible block highlight. The old accent-soft (~0.14 opacity) was
+     so faint it read as just recolored text rather than a selection block. */
+  background: rgb(var(--color-accent-rgb) / 0.3);
 }
 
 /* Keyboard shortcut chip — single source of truth so every kbd reads the same.

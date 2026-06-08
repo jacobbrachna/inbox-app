@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
-import { transformConversations, transformMessages } from '@/lib/transform';
+import { transformConversations, transformMessages, extractParticipant } from '@/lib/transform';
 import { CORS, safeParseArray, optionsResponse } from '@/lib/api-utils';
 import type { Conversation, Message } from '@/types';
 import { linkParticipantsToConversation } from '@/lib/contact-upsert';
@@ -543,6 +543,15 @@ export async function POST(req: NextRequest) {
     }
     if (!myName) myName = 'Me';
 
+    // Capture the user's OWN avatar for the sidebar footer. Nothing else ever
+    // wrote AppState.profileAvatarUrl — the "me" entity carries the profile
+    // picture in the same shape as any other participant.
+    let myAvatarUrl: string | undefined;
+    if (myProfileUrn && entities[myProfileUrn]) {
+      const me = extractParticipant(myProfileUrn, ctx);
+      if (me?.avatarUrl) myAvatarUrl = me.avatarUrl;
+    }
+
     // Build a map of conv URN → raw conversation object from the request body
     // (we passed transformed Conversation objects but want the raw alongside).
     // Also extract the source category (PRIMARY_INBOX / OTHER / ARCHIVE) which
@@ -703,12 +712,14 @@ export async function POST(req: NextRequest) {
         lastSyncedAt: new Date(),
         myProfileUrn: myProfileUrn || undefined,
         profileName: myName !== 'Me' ? myName : undefined,
+        profileAvatarUrl: myAvatarUrl || undefined,
       },
       create: {
         id: 1,
         lastSyncedAt: new Date(),
         myProfileUrn: myProfileUrn || undefined,
         profileName: myName !== 'Me' ? myName : undefined,
+        profileAvatarUrl: myAvatarUrl || undefined,
       },
     });
 
