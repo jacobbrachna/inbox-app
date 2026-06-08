@@ -171,7 +171,7 @@ export function AnalyticsPanel() {
   const [customTo, setCustomTo] = useState('');
   const [data, setData] = useState<AnalyticsData | null>(null);
   const [loading, setLoading] = useState(false);
-  const { labels } = useStore();
+  const { labels, currentRoleOnly, currentRoleStart } = useStore();
 
   const range = useMemo(() => getRange(period, customFrom, customTo), [period, customFrom, customTo]);
 
@@ -181,11 +181,13 @@ export function AnalyticsPanel() {
     const params = new URLSearchParams();
     if (range.from) params.set('from', range.from);
     if (range.to) params.set('to', range.to);
+    // Global "current role era" filter.
+    if (currentRoleOnly && currentRoleStart) params.set('roleStart', currentRoleStart);
     const qs = params.toString();
     fetch(`/api/analytics${qs ? '?' + qs : ''}`)
       .then((r) => r.json())
       .then((d) => { setData(d); setLoading(false); });
-  }, [range.from, range.to, period, customFrom, customTo]);
+  }, [range.from, range.to, period, customFrom, customTo, currentRoleOnly, currentRoleStart]);
 
   if (!data && !loading) {
     return <div className="card flex-1 overflow-y-auto p-6"><p className="text-[var(--color-text-tertiary)] text-[13px]">Loading analytics…</p></div>;

@@ -79,11 +79,15 @@ export function TasksPanel() {
   const [tab, setTab] = useState<Tab>('new');
   const setActiveConversationId = useStore((s) => s.setActiveConversationId);
   const setActiveFilter = useStore((s) => s.setActiveFilter);
+  const currentRoleOnly = useStore((s) => s.currentRoleOnly);
+  const currentRoleStart = useStore((s) => s.currentRoleStart);
 
   function load() {
     setLoading(true);
+    const roleQs = currentRoleOnly && currentRoleStart
+      ? `?roleStart=${encodeURIComponent(currentRoleStart)}` : '';
     return Promise.all([
-      fetch('/api/tasks').then((r) => r.json()),
+      fetch(`/api/tasks${roleQs}`).then((r) => r.json()),
       fetch('/api/tasks/job-changes').then((r) => r.json()).catch(() => ({ changes: [] })),
     ])
       .then(([t, j]: [TasksData, { changes: JobChangeItem[] }]) => {
@@ -94,7 +98,8 @@ export function TasksPanel() {
       .catch(() => setLoading(false));
   }
 
-  useEffect(() => { load(); }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, [currentRoleOnly, currentRoleStart]);
 
   function openConversation(id: string) {
     setActiveFilter('all');

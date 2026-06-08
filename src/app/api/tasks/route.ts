@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { CORS, safeParseArray, optionsResponse } from '@/lib/api-utils';
 import type { Participant } from '@/types';
@@ -48,8 +48,13 @@ export interface FollowUpContact {
   followUps: FollowUpThread[];
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const now = Date.now();
+  // Global "current role era" filter — applies to the conversation-derived
+  // tasks (follow-ups owed). New connections / job-changes are recent by nature.
+  const roleStartParam = new URL(req.url).searchParams.get('roleStart');
+  const roleStart = roleStartParam ? new Date(roleStartParam) : null;
+  const roleStartValid = roleStart && !Number.isNaN(roleStart.getTime()) ? roleStart : null;
   const today = new Date();
   today.setHours(23, 59, 59, 999); // include anything due "today"
 
@@ -119,6 +124,7 @@ export async function GET() {
     where: {
       status: { not: 'archived' },
       followUpAt: { lte: today },
+      ...(roleStartValid ? { lastMessageAt: { gte: roleStartValid } } : {}),
     },
     orderBy: { followUpAt: 'asc' },
     include: {

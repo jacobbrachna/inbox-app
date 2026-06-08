@@ -11,12 +11,19 @@ export function ReviewPanel() {
   const labels = useStore((s) => s.labels);
   const updateConversation = useStore((s) => s.updateConversation);
   const loadFromServer = useStore((s) => s.loadFromServer);
+  const currentRoleOnly = useStore((s) => s.currentRoleOnly);
+  const currentRoleStart = useStore((s) => s.currentRoleStart);
   const [refreshing, setRefreshing] = useState(false);
 
-  const toReview = useMemo(
-    () => conversations.filter((c) => c.needsReview === true),
-    [conversations],
-  );
+  const toReview = useMemo(() => {
+    let r = conversations.filter((c) => c.needsReview === true);
+    // Global "current role era" filter.
+    if (currentRoleOnly && currentRoleStart) {
+      const cutoff = new Date(currentRoleStart).getTime();
+      r = r.filter((c) => new Date(c.lastMessageAt).getTime() >= cutoff);
+    }
+    return r;
+  }, [conversations, currentRoleOnly, currentRoleStart]);
 
   // Group AI labels by exclusiveGroup so we can render mutex-aware chip rows
   const aiLabels = useMemo(() => labels.filter((l) => l.aiManaged), [labels]);

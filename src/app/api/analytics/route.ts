@@ -14,8 +14,14 @@ export async function GET(req: NextRequest) {
   const to = toStr
     ? new Date(new Date(toStr).getTime() + 86_400_000 - 1)
     : null;
+  // Global "current role era" filter — an additional floor on top of the date
+  // range, so analytics reflect only the user's current-role era when on.
+  const rs = searchParams.get('roleStart');
+  const roleStart = rs ? new Date(rs) : null;
+  const roleStartValid = roleStart && !Number.isNaN(roleStart.getTime()) ? roleStart : null;
 
   const inRange = (d: Date) => {
+    if (roleStartValid && d < roleStartValid) return false;
     if (from && d < from) return false;
     if (to && d > to) return false;
     return true;
