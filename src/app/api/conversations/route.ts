@@ -38,7 +38,11 @@ function rowToConversation(row: ConversationRow): Conversation {
 export async function GET() {
   const rows = await prisma.conversation.findMany({
     orderBy: { lastMessageAt: 'desc' },
-    take: 1000,
+    // Was 1000 — but users with bigger inboxes (1700+) silently lost their
+    // oldest threads from the UI entirely, which ALSO made the "current role
+    // era" filter look broken (the threads it would hide weren't even loaded).
+    // Plain row select (no message include), so no SQLite param-limit concern.
+    take: 20000,
   });
   const conversations = rows.map(rowToConversation);
   return NextResponse.json({ conversations }, { headers: CORS });

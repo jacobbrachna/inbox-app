@@ -64,6 +64,11 @@
   --color-accent-deep: color-mix(in srgb, rgb(var(--color-accent-rgb)) 82%, #000);
   --color-accent-fg: color-mix(in srgb, rgb(var(--color-accent-rgb)) 75%, #000);
 
+  /* Text selection — a neutral DARKEN overlay so it's visible on every surface,
+     including the blue own-message bubbles (an accent-tinted selection vanished
+     on those). Dark theme lightens instead (below). */
+  --selection-bg: rgba(24, 24, 27, 0.24);
+
   --color-bubble-own: #2563EB;
   --color-bubble-own-fg: #FFFFFF;
   --color-bubble-them: #F4F4F5;
@@ -115,6 +120,9 @@
   --color-accent-soft: rgb(var(--color-accent-rgb) / 0.18);
   --color-accent-deep: color-mix(in srgb, rgb(var(--color-accent-rgb)) 92%, #fff);
   --color-accent-fg: color-mix(in srgb, rgb(var(--color-accent-rgb)) 50%, #fff);
+
+  /* Dark theme: LIGHTEN selection so it reads on dark surfaces (and still on blue). */
+  --selection-bg: rgba(255, 255, 255, 0.26);
 
   --color-bubble-own: #2563EB;
   --color-bubble-own-fg: #FFFFFF;
@@ -168,11 +176,10 @@ button, a, input, textarea, select, [role="button"], [contenteditable="true"] {
 }
 
 ::selection {
-  /* A clearly-visible block highlight. `--color-accent-rgb` is COMMA-separated
-     ("37, 99, 235"), so `rgb(var(--color-accent-rgb) / 0.3)` is malformed and
-     renders nothing. color-mix on the already-valid --color-accent works
-     regardless of the triple's separator. */
-  background: color-mix(in srgb, var(--color-accent) 30%, transparent);
+  /* Theme-aware neutral overlay (darken in light, lighten in dark) so the
+     highlight is visible on ANY surface — including the blue own-message
+     bubbles, where an accent-tinted selection disappeared. */
+  background: var(--selection-bg);
 }
 
 /* Keyboard shortcut chip — single source of truth so every kbd reads the same.
