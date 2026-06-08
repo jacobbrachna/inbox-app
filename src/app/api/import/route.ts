@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
-import { transformConversations, transformMessages, extractParticipant } from '@/lib/transform';
+import { transformConversations, transformMessages } from '@/lib/transform';
 import { CORS, safeParseArray, optionsResponse } from '@/lib/api-utils';
 import type { Conversation, Message } from '@/types';
 import { linkParticipantsToConversation } from '@/lib/contact-upsert';
@@ -543,13 +543,17 @@ export async function POST(req: NextRequest) {
     }
     if (!myName) myName = 'Me';
 
-    // Capture the user's OWN avatar for the sidebar footer. Nothing else ever
-    // wrote AppState.profileAvatarUrl — the "me" entity carries the profile
-    // picture in the same shape as any other participant.
+    // Capture the user's OWN avatar for the sidebar footer (nothing else writes
+    // AppState.profileAvatarUrl). The sync's "me" entity usually lacks the
+    // picture, but the user's own Contact record — created when they refresh
+    // their LinkedIn profile — carries it. Only fill if not already set.
     let myAvatarUrl: string | undefined;
-    if (myProfileUrn && entities[myProfileUrn]) {
-      const me = extractParticipant(myProfileUrn, ctx);
-      if (me?.avatarUrl) myAvatarUrl = me.avatarUrl;
+    if (!existingState?.profileAvatarUrl && existingState?.myProfileSlug) {
+      const meContact = await prisma.contact.findUnique({
+        where: { profileSlug: existingState.myProfileSlug },
+        select: { avatarUrl: true },
+      });
+      myAvatarUrl = meContact?.avatarUrl ?? undefined;
     }
 
     // Build a map of conv URN → raw conversation object from the request body

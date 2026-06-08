@@ -168,9 +168,11 @@ button, a, input, textarea, select, [role="button"], [contenteditable="true"] {
 }
 
 ::selection {
-  /* A clearly-visible block highlight. The old accent-soft (~0.14 opacity) was
-     so faint it read as just recolored text rather than a selection block. */
-  background: rgb(var(--color-accent-rgb) / 0.3);
+  /* A clearly-visible block highlight. `--color-accent-rgb` is COMMA-separated
+     ("37, 99, 235"), so `rgb(var(--color-accent-rgb) / 0.3)` is malformed and
+     renders nothing. color-mix on the already-valid --color-accent works
+     regardless of the triple's separator. */
+  background: color-mix(in srgb, var(--color-accent) 30%, transparent);
 }
 
 /* Keyboard shortcut chip — single source of truth so every kbd reads the same.
