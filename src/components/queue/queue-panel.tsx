@@ -266,7 +266,6 @@ export function QueuePanel() {
   const [scoring, setScoring] = useState<{ done: number; total: number } | null>(null);
   const scoringInFlight = useRef(false);
   const setActiveConversationId = useStore((s) => s.setActiveConversationId);
-  const setActiveFilter = useStore((s) => s.setActiveFilter);
 
   function load() {
     setLoading(true);
@@ -314,7 +313,8 @@ export function QueuePanel() {
   }, [onlyIcp]);
 
   function open(id: string) {
-    setActiveFilter('all');
+    // Stay in the queue view — the thread opens in the panel beside the list
+    // (see page.tsx queue branch). No more navigating away to the inbox.
     setActiveConversationId(id);
   }
 

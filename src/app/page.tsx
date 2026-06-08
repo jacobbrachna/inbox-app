@@ -336,7 +336,12 @@ export default function Home() {
           ) : isReview ? (
             <div key="review" className="view-fade-in flex flex-1 min-w-0"><ReviewPanel /></div>
           ) : isQueue ? (
-            <div key="queue" className="view-fade-in flex flex-1 min-w-0"><QueuePanel /></div>
+            <div key="queue" className="view-fade-in flex flex-1 min-w-0 gap-3">
+              <QueuePanel />
+              {/* Open the selected thread right here in the queue's empty space
+                  instead of navigating away to the inbox. */}
+              {activeConversationId && <MessageThread />}
+            </div>
           ) : isContacts ? (
             <div key="contacts" className="view-fade-in flex flex-1 min-w-0"><ContactsPanel /></div>
           ) : isAnalytics ? (
