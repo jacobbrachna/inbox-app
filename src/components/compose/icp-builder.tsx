@@ -163,6 +163,33 @@ export function IcpBuilder() {
     }
   }
 
+  // AI re-score: Haiku reads each contact's full profile and reasons about fit
+  // (catches non-obvious fits the keyword scorer misses). Loops the batched
+  // endpoint by offset until done, showing live progress.
+  async function rescoreAi() {
+    setStatus(null);
+    setRescoring({ updated: 0, total: 0 });
+    let offset = 0;
+    try {
+      for (;;) {
+        const r = await fetch('/api/icp/rescore-ai', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ offset, limit: 60 }),
+        });
+        const d = await r.json();
+        if (!r.ok) { setStatus({ kind: 'err', msg: d.error ?? `HTTP ${r.status}` }); return; }
+        offset = d.nextOffset;
+        setRescoring({ updated: offset, total: d.total });
+        if (d.done) { setStatus({ kind: 'ok', msg: `AI-scored ${d.total} conversations with Claude.` }); break; }
+      }
+    } catch (e) {
+      setStatus({ kind: 'err', msg: e instanceof Error ? e.message : 'Failed' });
+    } finally {
+      setRescoring(null);
+    }
+  }
+
   // Save edited definition back to AppState. Triggered when the user tweaks
   // titles/keywords/etc. via the chip editors.
   async function saveDefinition(def: IcpDefinition) {
@@ -246,7 +273,19 @@ export function IcpBuilder() {
             style={{ transition: 'background-color 140ms var(--ease-out-quart)' }}
           >
             <RefreshCw className={cn('w-3.5 h-3.5', rescoring && 'animate-spin')} />
-            {rescoring ? 'Re-scoring…' : 'Re-score all conversations'}
+            {rescoring ? 'Scoring…' : 'Re-score (keyword)'}
+          </button>
+        )}
+        {def && (
+          <button
+            onClick={rescoreAi}
+            disabled={!!rescoring}
+            className="flex items-center gap-2 px-3 py-2 bg-[var(--color-accent-soft)] hover:bg-[var(--color-card-hover)] border border-[var(--color-accent)]/30 text-[var(--color-accent-fg)] text-[12px] font-medium rounded-lg disabled:opacity-50"
+            style={{ transition: 'background-color 140ms var(--ease-out-quart)' }}
+            title="Claude (Haiku) reads each contact's full profile and reasons about fit — catches non-obvious fits the keyword scorer misses (~$1–2)"
+          >
+            <Sparkles className={cn('w-3.5 h-3.5', rescoring && 'animate-pulse')} />
+            {rescoring ? `AI scoring… ${rescoring.updated}/${rescoring.total}` : 'Re-score with AI (Claude)'}
           </button>
         )}
         {fields.icpBuiltAt && (
