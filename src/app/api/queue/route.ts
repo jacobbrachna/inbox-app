@@ -59,12 +59,18 @@ export async function GET(req: NextRequest) {
   const showHidden = searchParams.get('showHidden') === '1';
   // Optional strict mode — drops non-ICP-fit items entirely.
   const onlyIcp = searchParams.get('onlyIcp') === '1';
+  // Global "current role era" filter — only threads with activity since the
+  // user's current role started (mirrors the inbox toggle).
+  const roleStartParam = searchParams.get('roleStart');
+  const roleStart = roleStartParam ? new Date(roleStartParam) : null;
+  const roleStartValid = roleStart && !Number.isNaN(roleStart.getTime()) ? roleStart : null;
 
   // Page through to stay under SQLite's 999-param limit on the message
   // include + _count subquery.
   const convIds = await prisma.conversation.findMany({
     where: {
       status: { not: 'archived' },
+      ...(roleStartValid ? { lastMessageAt: { gte: roleStartValid } } : {}),
       ...(showHidden ? {} : {
         queueDismissed: false,
         OR: [{ snoozedUntil: null }, { snoozedUntil: { lte: new Date(now) } }],

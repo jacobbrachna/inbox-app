@@ -266,11 +266,18 @@ export function QueuePanel() {
   const [scoring, setScoring] = useState<{ done: number; total: number } | null>(null);
   const scoringInFlight = useRef(false);
   const setActiveConversationId = useStore((s) => s.setActiveConversationId);
+  // The "current role era" toggle is a GLOBAL filter — apply it to the queue
+  // too (server-side, so the buckets + counts stay accurate).
+  const currentRoleOnly = useStore((s) => s.currentRoleOnly);
+  const currentRoleStart = useStore((s) => s.currentRoleStart);
 
   function load() {
     setLoading(true);
-    const qs = onlyIcp ? '?onlyIcp=1' : '';
-    return fetch(`/api/queue${qs}`)
+    const params = new URLSearchParams();
+    if (onlyIcp) params.set('onlyIcp', '1');
+    if (currentRoleOnly && currentRoleStart) params.set('roleStart', currentRoleStart);
+    const qs = params.toString();
+    return fetch(`/api/queue${qs ? `?${qs}` : ''}`)
       .then((r) => r.json())
       .then((d) => { setData(d); setLoading(false); return d as QueueData; })
       .catch(() => { setLoading(false); return null; });
@@ -310,7 +317,7 @@ export function QueuePanel() {
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onlyIcp]);
+  }, [onlyIcp, currentRoleOnly, currentRoleStart]);
 
   function open(id: string) {
     // Stay in the queue view — the thread opens in the panel beside the list
