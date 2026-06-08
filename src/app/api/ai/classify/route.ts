@@ -78,9 +78,9 @@ export async function POST(req: NextRequest) {
       const who = parts[0]?.name ?? 'Unknown';
       const role = parts[0]?.headline ?? '';
       const snippet = c.messages
-        .map((m) => `${m.isFromMe ? myName : m.senderName}: ${m.body.trim().slice(0, 240)}`)
+        .map((m) => `[${m.sentAt.toISOString().slice(0, 10)}] ${m.isFromMe ? myName : m.senderName}: ${m.body.trim().slice(0, 240)}`)
         .join('\n')
-        .slice(0, 1200);
+        .slice(0, 1400);
       return `## ITEM ${idx + 1}\nID: ${c.id}\nFrom: ${who}${role ? ` (${role})` : ''}\nTranscript:\n${snippet}`;
     }).join('\n\n');
 
@@ -118,6 +118,12 @@ export async function POST(req: NextRequest) {
     const systemPrompt = [
       `You classify LinkedIn conversations for ${myName}, a salesperson.`,
       `Today's date: ${todayIso}`,
+      '',
+      `RECENCY — every transcript line is prefixed with its date [YYYY-MM-DD]. Reason about TIME, not just content:`,
+      `• A next-step / commitment ("let's schedule", "I'll send times", "meet next week") from MONTHS ago with no newer reply is LAPSED. Treat the thread as stalled/ghosted — apply "ai-ghosted", NOT a live follow-up. Never resurface an ancient promise as the current state.`,
+      `• Meeting ALREADY in the PAST: if a meeting was booked for a date now BEFORE today, it has happened (or was a no-show). Use "ai-meeting-done" (NOT "ai-meeting-booked"), and emit NO future follow-up for it. Say so in the summary (e.g. "met on Apr 2; no follow-up since").`,
+      `• Only treat a commitment as live/actionable if its timing is still in the FUTURE vs today AND the thread hasn't sat silent for weeks past it.`,
+      `• The summary + signal must reflect the CURRENT reality given the dates, not a stale snapshot.`,
       '',
       `For each item write a SUMMARY of ≤ 20 words capturing where the conversation stands and what action is open.`,
       '',

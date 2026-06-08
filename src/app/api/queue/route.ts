@@ -46,11 +46,20 @@ interface QueueItem {
   isIcp: boolean;
   manualIcp: boolean;
   snoozedUntil: string | null;
+  labels: string[];
 }
 
 // ICP cutoff: anything ≥ this counts as ICP. Tuned to "close fits and clear
 // matches in, weak fits out." Adjustable later if Claude's scoring drifts.
 const ICP_THRESHOLD = 60;
+
+// Terminal / handled states — drop these from the worklist entirely. You've
+// already met (meeting-done), it's dead (not-interested / ghosted / spam), or
+// it's an active deal handled off-LinkedIn (in-deal, user-applied for POVs/
+// customers). They clutter the queue and aren't actionable cold-follow-ups.
+const TERMINAL_LABELS = new Set([
+  'not-interested', 'ai-spam', 'ai-ghosted', 'ai-meeting-done', 'in-deal',
+]);
 
 export async function GET(req: NextRequest) {
   const now = Date.now();
@@ -93,6 +102,10 @@ export async function GET(req: NextRequest) {
   const stale: QueueItem[] = [];
 
   for (const c of convs) {
+    // Drop terminal / handled states (met, dead, or active deal) from the queue.
+    const convLabels = safeParseArray<string>(c.labels, []);
+    if (convLabels.some((l) => TERMINAL_LABELS.has(l))) continue;
+
     const parts = safeParseArray<Participant>(c.participants, []);
     const p = parts[0];
     let enrichment: { company?: string } | null = null;
@@ -116,6 +129,7 @@ export async function GET(req: NextRequest) {
       isIcp,
       manualIcp,
       snoozedUntil: c.snoozedUntil ? c.snoozedUntil.toISOString() : null,
+      labels: convLabels,
     };
 
     const last = c.messages[0];

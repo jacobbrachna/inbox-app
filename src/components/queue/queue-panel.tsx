@@ -2,7 +2,7 @@
 import { useEffect, useState, useRef } from 'react';
 import {
   Flame, AlertTriangle, Snowflake, Moon, ChevronRight, RefreshCw,
-  Sparkles, MoreHorizontal, Star, BellOff, Clock,
+  Sparkles, MoreHorizontal, Star, BellOff, Clock, Handshake,
 } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { useStore } from '@/store';
@@ -22,6 +22,7 @@ interface QueueItem {
   isIcp: boolean;
   manualIcp: boolean;
   snoozedUntil: string | null;
+  labels: string[];
 }
 
 interface QueueData {
@@ -98,6 +99,12 @@ function RowMenu({ item, onMutate }: { item: QueueItem; onMutate: () => void }) 
     await patchConversation(item.id, { queueDismissed: true });
     onMutate();
   }
+  async function markInDeal() {
+    setOpen(false);
+    const next = item.labels.includes('in-deal') ? item.labels : [...item.labels, 'in-deal'];
+    await patchConversation(item.id, { labels: next });
+    onMutate();
+  }
   async function toggleIcp() {
     setOpen(false);
     await patchConversation(item.id, { manualIcp: !item.manualIcp });
@@ -141,6 +148,14 @@ function RowMenu({ item, onMutate }: { item: QueueItem; onMutate: () => void }) 
             >
               <BellOff className="w-3.5 h-3.5" />
               Not a priority
+            </button>
+            <button
+              onClick={markInDeal}
+              className="w-full flex items-center gap-2 px-3 py-2 text-[12.5px] text-[var(--color-text-secondary)] hover:bg-[var(--color-card-hover)]"
+              title="In an active deal / POV / won — remove from the queue"
+            >
+              <Handshake className="w-3.5 h-3.5" />
+              In deal / won
             </button>
             <div className="border-t border-[var(--color-hairline)] my-1" />
             <div className="px-3 pt-1.5 pb-1 text-[10.5px] uppercase tracking-wider text-[var(--color-text-tertiary)] font-medium flex items-center gap-1.5">
