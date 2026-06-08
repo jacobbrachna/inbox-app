@@ -64,9 +64,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'No ICP targeting set — fill in the ICP Builder first.' }, { status: 400, headers: CORS });
   }
 
-  let client;
-  try { client = await requireAnthropic(); }
-  catch { return NextResponse.json({ error: 'No Anthropic API key configured' }, { status: 400, headers: CORS }); }
+  const client = await requireAnthropic().catch(() => null);
+  if (!client) return NextResponse.json({ error: 'No Anthropic API key configured' }, { status: 400, headers: CORS });
 
   const total = await prisma.conversation.count({ where: { status: { not: 'archived' } } });
   const convs = await prisma.conversation.findMany({
