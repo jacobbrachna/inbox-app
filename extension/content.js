@@ -1,6 +1,33 @@
 // Content script — captures LinkedIn's messaging API responses, resolves URN refs,
 // and bulk-fetches messages. Designed for inboxes with 1000+ threads.
 
+// ── Circuit breaker for the Relay app (:3030) ───────────────────────────────
+// When the desktop app is closed, every forward to localhost:3030 (sync-log,
+// imports, etc.) gets ERR_CONNECTION_REFUSED — and Chrome logs each one even
+// when we .catch() it, flooding the page console. Wrap THIS content script's
+// own fetch (ISOLATED world — page fetch untouched): after one connection
+// failure, suppress further :3030 calls for a cooldown so a shut app stays
+// quiet. Real calls resume automatically once the app is back.
+(function () {
+  const origFetch = window.fetch.bind(window);
+  let downUntil = 0;
+  window.fetch = function (input, init) {
+    const url = typeof input === 'string' ? input : (input && input.url) || '';
+    if (url.includes('localhost:3030') || url.includes('127.0.0.1:3030')) {
+      if (Date.now() < downUntil) {
+        // App known-down — resolve a synthetic 503 so callers' .ok/.catch paths
+        // behave without touching the network (no console error).
+        return Promise.resolve(new Response(null, { status: 503, statusText: 'relay-app-down' }));
+      }
+      return origFetch(input, init).catch((e) => {
+        downUntil = Date.now() + 30_000; // back off 30s after a refusal
+        throw e;
+      });
+    }
+    return origFetch(input, init);
+  };
+})();
+
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 function injectScript() {
@@ -397,6 +424,27 @@ window.addEventListener('message', (ev) => {
     } catch {
       // extension context invalidated (e.g. reloaded); silent
     }
+  }
+
+  // Connections list — the My Network → Connections page fires this when it
+  // loads/scrolls. The response carries each connection's profile + the
+  // connectedAt timestamp + company, which the DOM cards lack. Forward the raw
+  // body to /api/import/connections, which parses + persists connectedOn so the
+  // Tasks "New Connections" list can tell new from old and hide coworkers.
+  const isConnectionsUrl = (
+    url.includes('voyagerRelationshipsDashConnections') ||
+    url.includes('relationships/dash/connections') ||
+    /relationships\/connections|connectionsV2/.test(url)
+  );
+  if (isConnectionsUrl && typeof ev.data.body === 'string' && ev.data.body.length > 100) {
+    try {
+      const raw = JSON.parse(ev.data.body);
+      fetch('http://localhost:3030/api/import/connections', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ raw }),
+      }).catch(() => {});
+    } catch { /* non-JSON body; skip */ }
   }
 
   // SDUI profile components — modern LinkedIn rendering path. Forward raw

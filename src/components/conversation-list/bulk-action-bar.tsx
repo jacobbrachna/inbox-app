@@ -99,12 +99,12 @@ export function BulkActionBar({ visibleCount }: BulkActionBarProps) {
       className="px-4 py-3 border-b border-[var(--color-hairline)] bg-[var(--color-surface)]"
       style={{ animation: 'row-in var(--dur-medium) var(--ease-spring-gentle) both' }}
     >
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-2 text-[12px]">
-          <span className="font-semibold text-[var(--color-text-primary)]">{count} selected</span>
+      <div className="flex items-center justify-between gap-2 mb-2">
+        <div className="flex items-center gap-2 text-[12px] min-w-0">
+          <span className="font-semibold text-[var(--color-text-primary)] truncate">{count} selected</span>
           <button
             onClick={() => (allSelected ? clearSelection() : selectAll())}
-            className="eyebrow text-[var(--color-accent-deep)] hover:text-[var(--color-text-primary)]"
+            className="eyebrow text-[var(--color-accent-deep)] hover:text-[var(--color-text-primary)] flex-shrink-0 whitespace-nowrap"
             style={{ transition: 'color 150ms var(--ease-out-quart)' }}
           >
             {allSelected ? 'Clear' : `Select all ${visibleCount}`}
@@ -112,7 +112,7 @@ export function BulkActionBar({ visibleCount }: BulkActionBarProps) {
         </div>
         <button
           onClick={clearSelection}
-          className="p-1 text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]"
+          className="p-1 text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] flex-shrink-0"
           style={{ transition: 'color 150ms var(--ease-out-quart)' }}
           title="Cancel selection"
         >

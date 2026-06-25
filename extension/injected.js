@@ -153,6 +153,7 @@
       if (isSnActionURL(url, method) && res.ok) {
         postIntercept({ __inboxproSnAction: true, url, method, status: res.status });
       }
+
     } catch (e) {}
     return res;
   };

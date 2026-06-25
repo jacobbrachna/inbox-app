@@ -159,8 +159,8 @@ export function ConversationList() {
       <div className="card w-full h-full flex flex-col overflow-hidden">
       {/* Header */}
       <div className="px-5 pt-5 pb-3 border-b border-[var(--color-hairline)]">
-        <div className="flex items-center justify-between mb-1">
-          <h2 className="text-[18px] font-semibold tracking-tight text-[var(--color-text-primary)]">
+        <div className="flex items-center justify-between gap-2 mb-1">
+          <h2 className="text-[18px] font-semibold tracking-tight text-[var(--color-text-primary)] truncate min-w-0">
             {getTitle()}
           </h2>
           <button

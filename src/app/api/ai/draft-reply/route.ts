@@ -53,11 +53,24 @@ export async function POST(req: NextRequest) {
     const senderBlock = buildSenderContextBlock(state);
     const docsBlock = buildDocsContextBlock(docs);
 
-    // Last 12 messages for thread context (most recent at bottom)
+    // Last 12 messages for thread context (most recent at bottom). Each line
+    // is date-stamped [YYYY-MM-DD] so the model can reason about recency — a
+    // months-old last message means a re-opener, not a live back-and-forth.
     const recent = conv.messages.slice(-12);
     const transcript = recent
-      .map((m) => `${m.isFromMe ? myName : m.senderName}: ${m.body.trim()}`)
+      .map((m) => `[${m.sentAt.toISOString().slice(0, 10)}] ${m.isFromMe ? myName : m.senderName}: ${m.body.trim()}`)
       .join('\n\n');
+
+    // Last-message awareness: who spoke last, when, and how long the thread
+    // has sat idle. Drives whether the user is REPLYING to the other party or
+    // CHASING their own unanswered message — very different drafts.
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const lastMsg = recent[recent.length - 1];
+    const lastFromMe = lastMsg?.isFromMe ?? false;
+    const lastSender = lastMsg ? (lastFromMe ? myName : (lastMsg.senderName || 'them')) : null;
+    const daysSinceLast = lastMsg
+      ? Math.floor((Date.now() - lastMsg.sentAt.getTime()) / (24 * 60 * 60 * 1000))
+      : null;
 
     // Up to 6 of the user's recent outbound messages — Claude uses these as
     // style samples to match the user's voice across drafts.
@@ -101,9 +114,24 @@ export async function POST(req: NextRequest) {
     const contactSignals = [contact?.about, contact?.prevRoles, contact?.recentPosts].filter(Boolean).length;
     const readiness: 'thin' | 'some' | 'strong' = contactSignals === 0 ? 'thin' : contactSignals === 1 ? 'some' : 'strong';
 
+    // Recency + last-speaker briefing for the model. The transcript is already
+    // date-stamped; this spells out the implication so drafts don't read as if
+    // a stale thread is live or thank someone for a reply they never sent.
+    const recencyBlock = lastMsg ? [
+      `\nTHREAD TIMING (reason about this — do not write as if every thread is live):`,
+      `• Today is ${todayIso}.`,
+      lastFromMe
+        ? `• The LAST message was sent by ${myName} (the user)${daysSinceLast !== null ? `, ${daysSinceLast} day(s) ago` : ''}, and ${otherPersonName} has NOT replied. The user is CHASING their own unanswered message — do not thank ${otherPersonName} for replying; write a light follow-up/nudge or add new value.`
+        : `• The LAST message was from ${lastSender}${daysSinceLast !== null ? `, ${daysSinceLast} day(s) ago` : ''}. The user is REPLYING to ${otherPersonName}.`,
+      daysSinceLast !== null && daysSinceLast >= 21
+        ? `• This thread has been idle for ${daysSinceLast} days. Acknowledge the gap naturally ("it's been a while", "circling back") rather than writing as if the last message just arrived. Don't treat stale specifics (old dates, "next week", past plans) as still current.`
+        : '',
+    ].filter(Boolean).join('\n') : '';
+
     const systemPrompt = [
       `You are drafting LinkedIn reply messages for ${myName}, a sales/business-development professional.`,
       otherPersonRole ? `The conversation is with ${otherPersonName} (${otherPersonRole}).` : `The conversation is with ${otherPersonName}.`,
+      recencyBlock,
       '',
       'Hard rules:',
       '• Match the user\'s tone exactly — refer to their style samples below.',
@@ -112,6 +140,7 @@ export async function POST(req: NextRequest) {
       '• Skip greetings if the thread is already mid-conversation (no "Hi X," on a 5th-message reply).',
       '• Don\'t invent facts or stats. If a number/claim isn\'t in the sender/reference context below, don\'t use it.',
       '• If you need info you don\'t have, leave a [bracket placeholder].',
+      '• NEVER use em dashes (—) or en dashes (–). Use commas, periods, or restructure. Hard rule.',
       styleNote ? `\nUser's style note (verbatim, follow this):\n"${styleNote}"` : '',
       myMessages.length > 0
         ? `\nThe user's own recent messages in this thread (match their voice):\n${myMessages.map((m, i) => `${i + 1}. ${m}`).join('\n')}`

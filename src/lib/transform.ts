@@ -1,4 +1,4 @@
-import type { Conversation, Message, Participant } from '@/types';
+import type { Conversation, Message, MessageAttachment, Participant } from '@/types';
 
 export interface TransformContext {
   entities?: Record<string, unknown>;
@@ -66,6 +66,131 @@ function avatarFromPhotoObj(photo: unknown): string | undefined {
   const vi = obj(p.vectorImage) ?? obj(p.displayImageWithDigitalAsset) ?? obj(p.cropInfo);
   if (vi) return avatarFromVectorImage(vi);
   return avatarFromRootAndArtifacts(p.rootUrl, p.artifacts);
+}
+
+// ─── Attachment / media extraction ─────────────────────────────────────────
+
+/** Build a displayable image URL from a vectorImage ({rootUrl, artifacts}). */
+function imageUrlFromVectorImage(vi: Record<string, unknown> | undefined): string | undefined {
+  if (!vi) return undefined;
+  // When artifacts are present, build the largest; otherwise rootUrl is a
+  // ready-to-use full URL (the messaging-image case).
+  return avatarFromRootAndArtifacts(vi.rootUrl, vi.artifacts) ?? str(vi.rootUrl);
+}
+
+/**
+ * Parse a message's `renderContent[]` into MessageAttachment[]. LinkedIn packs
+ * every possible media type into each renderContent item as a union where all
+ * but one key are null — so we test file → image → audio → video and take the
+ * first non-null. Shapes are read defensively (audio/video vary by client).
+ */
+function extractAttachments(r: Record<string, unknown>): MessageAttachment[] {
+  const rc = arr(r.renderContent);
+  const out: MessageAttachment[] = [];
+  for (const itemU of rc) {
+    const item = obj(itemU);
+    if (!item) continue;
+
+    // FILE — messaging file attachment (pdf, docx, …)
+    const file = obj(item.file);
+    if (file) {
+      out.push({
+        kind: 'file',
+        name: str(file.name),
+        mediaType: str(file.mediaType),
+        byteSize: num(file.byteSize),
+        remoteUrl: str(file.url),
+        assetUrn: str(file.assetUrn),
+      });
+      continue;
+    }
+
+    // IMAGE — inline vectorImage
+    const vi = obj(item.vectorImage);
+    if (vi) {
+      out.push({
+        kind: 'image',
+        remoteUrl: imageUrlFromVectorImage(vi),
+        assetUrn: str(vi.digitalmediaAsset),
+        width: num(vi.width),
+        height: num(vi.height),
+      });
+      continue;
+    }
+
+    // AUDIO — voice message
+    const audio = obj(item.audio);
+    if (audio) {
+      const am = obj(audio.audioMetadata);
+      out.push({
+        kind: 'audio',
+        remoteUrl: str(audio.url) ?? str(am?.url),
+        durationMs: num(audio.duration) ?? num(audio.durationMs) ?? num(am?.duration),
+        mediaType: str(audio.mediaType) ?? 'audio/mp4',
+        assetUrn: str(audio.urn) ?? str(audio.assetUrn),
+      });
+      continue;
+    }
+
+    // VIDEO — videoPlayMetadata with progressive streams + thumbnail
+    const video = obj(item.video) ?? obj(item.videoPlayMetadata);
+    if (video) {
+      const meta = obj(video.videoPlayMetadata) ?? video;
+      let streamUrl: string | undefined;
+      for (const sU of arr(meta.progressiveStreams)) {
+        const s = obj(sU);
+        const loc = obj(arr(s?.streamingLocations)[0]);
+        const u = str(loc?.url);
+        if (u) { streamUrl = u; break; }
+      }
+      const thumb = obj(meta.thumbnail);
+      out.push({
+        kind: 'video',
+        remoteUrl: streamUrl,
+        thumbRemoteUrl: imageUrlFromVectorImage(thumb) ?? str(thumb?.url),
+        durationMs: num(meta.duration),
+        mediaType: 'video/mp4',
+        assetUrn: str(video.media) ?? str(video.entityUrn),
+      });
+      continue;
+    }
+  }
+  return out;
+}
+
+/** Public wrapper: parse one raw message object's attachments. Used by the
+ *  backfill that re-derives media from stored Message.rawData. */
+export function parseAttachmentsFromRaw(rawMsg: unknown): MessageAttachment[] {
+  const r = obj(rawMsg);
+  return r ? extractAttachments(r) : [];
+}
+
+/** Public: derive group metadata from a stored raw conversation object. Used by
+ *  both the live transform and the backfill over Conversation.rawData. */
+export function deriveGroupForRaw(
+  rawConv: unknown,
+  myUrn: string,
+): { isGroup: boolean; memberCount: number | null; groupName: string | null } {
+  const r = obj(rawConv) ?? {};
+  const rawParticipants = arr(
+    r.participants ?? r.conversationParticipants ?? r['*conversationParticipants'] ?? r['*participants'],
+  );
+  const me = myUrn || '';
+  const others = me
+    ? rawParticipants.filter((p) => {
+        if (typeof p === 'string') return !p.includes(me); // URN-string arrays
+        const host = obj(p)?.hostIdentityUrn;
+        return typeof host === 'string' ? host !== me : true;
+      })
+    : rawParticipants;
+  const othersCount = me ? others.length : Math.max(0, rawParticipants.length - 1);
+  const isGroup = othersCount > 1;
+  const convTitle = str(r.title) ?? str(obj(r.title)?.text);
+  return {
+    isGroup,
+    memberCount: rawParticipants.length > 0 ? rawParticipants.length : null,
+    groupName: isGroup ? (convTitle ?? null) : null,
+  };
 }
 
 // ─── Participant name extraction ──────────────────────────────────────────────
@@ -384,10 +509,25 @@ export function transformConversations(
     const lastMessage = extractLastMessage(r);
     const isRead = extractReadStatus(r);
 
+    // ── Group detection ──────────────────────────────────────────────────────
+    // "others" = everyone in the thread who isn't me. >1 other = a group.
+    const meKnown = !!me;
+    const othersCount = meKnown
+      ? otherParticipants.length
+      : Math.max(0, rawParticipants.length - 1); // assume one of the raw set is me
+    const isGroup = othersCount > 1;
+    const memberCount = rawParticipants.length > 0
+      ? rawParticipants.length
+      : (participants.length + (meKnown ? 1 : 0)) || null;
+    const groupName = isGroup ? (convTitle ?? null) : null;
+
     return {
       id: str(r.entityUrn) ?? str(r.id) ?? `conv-${Date.now()}-${Math.random()}`,
       source,
       participants,
+      isGroup,
+      memberCount,
+      groupName,
       lastMessage,
       lastMessageAt: extractTimestamp(r),
       lastMessageSenderId: '',
@@ -440,8 +580,13 @@ export function transformMessages(
         (actorMatchesSender ? obj(memberFromActor) : undefined) ??
         resolvedFromUrn;
 
+      // Media parsed from renderContent[]. A message can be media-only (no
+      // text body) — historically those were dropped because the gate below
+      // required a body. Now attachments alone keep the message.
+      const attachments = extractAttachments(r);
+
       const directBody = str(obj(r.body)?.text) ?? str(r.body);
-      if (directBody !== undefined) {
+      if (directBody !== undefined || attachments.length > 0) {
         const senderId = hostUrn;
 
         // isFromMe — substring match because senderId can be either a raw
@@ -470,9 +615,10 @@ export function transformMessages(
           conversationId: str(r.conversationUrn) ?? '',
           senderId,
           senderName,
-          body: directBody,
+          body: directBody ?? '',
           sentAt: new Date(sentAt).toISOString(),
           isFromMe,
+          attachments: attachments.length > 0 ? attachments : undefined,
         } satisfies Message;
       }
 
@@ -505,6 +651,7 @@ export function transformMessages(
         body,
         sentAt: new Date(num(r.createdAt) ?? Date.now()).toISOString(),
         isFromMe: !!myProfileId && senderId === myProfileId,
+        attachments: attachments.length > 0 ? attachments : undefined,
       } satisfies Message;
     })
     .filter(Boolean) as Message[];

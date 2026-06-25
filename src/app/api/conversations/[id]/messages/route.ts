@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
-import { CORS, optionsResponse } from '@/lib/api-utils';
-import type { Message } from '@/types';
+import { CORS, optionsResponse, safeParseArray } from '@/lib/api-utils';
+import type { Message, MessageAttachment } from '@/types';
 
 export async function GET(
   _req: NextRequest,
@@ -12,15 +12,21 @@ export async function GET(
     where: { conversationId: id },
     orderBy: { sentAt: 'asc' },
   });
-  const messages: Message[] = rows.map((r) => ({
-    id: r.id,
-    conversationId: r.conversationId,
-    senderId: r.senderId,
-    senderName: r.senderName,
-    body: r.body,
-    sentAt: r.sentAt.toISOString(),
-    isFromMe: r.isFromMe,
-  }));
+  const messages: Message[] = rows.map((r) => {
+    const attachments = r.attachments
+      ? safeParseArray<MessageAttachment>(r.attachments, [])
+      : undefined;
+    return {
+      id: r.id,
+      conversationId: r.conversationId,
+      senderId: r.senderId,
+      senderName: r.senderName,
+      body: r.body,
+      sentAt: r.sentAt.toISOString(),
+      isFromMe: r.isFromMe,
+      attachments: attachments && attachments.length > 0 ? attachments : undefined,
+    };
+  });
   return NextResponse.json({ messages }, { headers: CORS });
 }
 

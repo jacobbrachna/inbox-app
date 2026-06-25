@@ -254,6 +254,14 @@ async function upsertConversation(c: Conversation, raw?: unknown, sourceCategory
         isStarred: existing.isStarred,
         snoozedUntil: existing.snoozedUntil ?? snoozedUntil,
         labels: JSON.stringify(preservedLabels),
+        // Group metadata: only refresh when this payload actually carried real
+        // participants — a thin refreshThread object must not reset a known
+        // group back to isGroup=false.
+        ...(incomingHasRealParticipants ? {
+          isGroup: !!c.isGroup,
+          memberCount: c.memberCount ?? existing.memberCount ?? null,
+          groupName: c.groupName ?? existing.groupName ?? null,
+        } : {}),
         ...(rawDataJson ? { rawData: rawDataJson } : {}),
       },
     });
@@ -267,6 +275,9 @@ async function upsertConversation(c: Conversation, raw?: unknown, sourceCategory
         id: c.id,
         source: c.source ?? 'linkedin',
         participants: participantsJson,
+        isGroup: !!c.isGroup,
+        memberCount: c.memberCount ?? null,
+        groupName: c.groupName ?? null,
         lastMessage: c.lastMessage ?? '',
         lastMessageAt,
         unreadCount: c.unreadCount ?? 0,
@@ -336,9 +347,19 @@ async function upsertMessages(
         body: m.body ?? '',
         sentAt: m.sentAt ? new Date(m.sentAt) : new Date(),
         isFromMe: !!m.isFromMe,
+        attachments: m.attachments && m.attachments.length > 0 ? JSON.stringify(m.attachments) : null,
         rawData: m._raw ? JSON.stringify(m._raw) : null,
       })),
     });
+
+    // Flip the conversation's denormalized attachments flag when any inserted
+    // message carried media — powers the "Attachments" inbox filter.
+    if (toInsert.some((m) => m.attachments && m.attachments.length > 0)) {
+      await prisma.conversation.update({
+        where: { id: conversationId },
+        data: { hasAttachments: true },
+      }).catch(() => {});
+    }
 
     // Notification: fire one per import batch for the FIRST inbound message
     // landing in a known conversation. De-dupes via createNotification's

@@ -123,9 +123,10 @@ async function dispatchIpproWsMessage(msg) {
       }
       case 'relay-send-message': {
         const isSn = typeof msg.conversationUrn === 'string' && msg.conversationUrn.startsWith('sn:');
+        // Attachments are LinkedIn-DM only for now (SN upload not built).
         const result = isSn
           ? await sendSnMessage({ threadId: msg.conversationUrn, body: msg.body })
-          : await sendLinkedInMessage({ conversationUrn: msg.conversationUrn, body: msg.body });
+          : await sendLinkedInMessage({ conversationUrn: msg.conversationUrn, body: msg.body, attachments: msg.attachments });
         emit('relay-send-result', result);
         return;
       }
@@ -184,7 +185,7 @@ async function dispatchIpproWsMessage(msg) {
       case 'relay-new-thread-request': {
         let result;
         if (msg.channel === 'linkedin') {
-          result = await createLinkedInThread({ recipientUrn: msg.recipientUrn, body: msg.body });
+          result = await createLinkedInThread({ recipientUrn: msg.recipientUrn, body: msg.body, attachments: msg.attachments });
         } else if (msg.channel === 'sn') {
           result = await createSnInMail({ recipientUrn: msg.recipientUrn, subject: msg.subject, body: msg.body });
         } else {
@@ -315,8 +316,43 @@ async function openApp() {
 // Map of chrome notification id → conversation entityUrn for click handling.
 const notificationToConv = new Map();
 
-async function showNotification({ title, body, convId }) {
+// Notification prefs (set in Relay → Settings → Notifications), fetched from
+// the app and cached briefly. Gates the extension's Chrome notifications by
+// type + master switch + quiet hours, mirroring src/lib/notification-prefs.ts.
+let _notifPrefs = null, _notifPrefsAt = 0;
+async function getNotificationPrefs() {
+  const now = Date.now();
+  if (_notifPrefs && now - _notifPrefsAt < 60000) return _notifPrefs;
   try {
+    const r = await fetch(`${INBOXPRO_URL}/api/state`);
+    if (r.ok) {
+      const j = await r.json();
+      if (j && j.notificationPrefs) { _notifPrefs = j.notificationPrefs; _notifPrefsAt = now; }
+    }
+  } catch {}
+  return _notifPrefs || { enabled: true, sound: true, quietHours: { enabled: false }, types: {} };
+}
+function extInQuietHours(prefs) {
+  const q = prefs.quietHours || {};
+  if (!q.enabled) return false;
+  const toMin = (s) => { const [h, m] = String(s || '0:0').split(':').map(Number); return (h || 0) * 60 + (m || 0); };
+  const d = new Date();
+  const now = d.getHours() * 60 + d.getMinutes();
+  const s = toMin(q.start), e = toMin(q.end);
+  if (s === e) return false;
+  return s < e ? (now >= s && now < e) : (now >= s || now < e);
+}
+function extShouldDesktop(prefs, kind) {
+  if (!prefs.enabled) return false;
+  if (extInQuietHours(prefs)) return false;
+  const t = (prefs.types || {})[kind];
+  return t ? t.desktop : true;
+}
+
+async function showNotification({ title, body, convId, kind }) {
+  try {
+    const prefs = await getNotificationPrefs();
+    if (!extShouldDesktop(prefs, kind || 'system')) return;
     const notifId = await new Promise((resolve) => {
       chrome.notifications.create(
         '',
@@ -326,6 +362,7 @@ async function showNotification({ title, body, convId }) {
           title: title || 'New LinkedIn message',
           message: body || '',
           priority: 1,
+          silent: !prefs.sound,
         },
         (id) => resolve(id),
       );
@@ -372,12 +409,76 @@ function encodeURN(urn) {
     .replace(/'/g, '%27').replace(/!/g, '%21');
 }
 
+// ── Upload a messaging attachment, return its renderContentUnion ─────────────
+// Captured flow (2026-06-10, see memory project-relay-send-attachments):
+//   metadata POST → PUT bytes → reference assetUrn in createMessage. Images and
+//   files both use the `file` union; only mediaUploadType + mediaType differ.
+async function uploadMessagingAttachment({ name, mediaType, bytesB64 }) {
+  const auth = await getLinkedInAuth();
+  if (!auth) return { ok: false, reason: 'not-logged-in' };
+  let bytes;
+  try {
+    const bin = atob(bytesB64);
+    bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  } catch { return { ok: false, reason: 'bad attachment bytes' }; }
+  const fileSize = bytes.byteLength;
+  const isImage = /^image\//i.test(mediaType || '');
+  const mediaUploadType = isImage ? 'MESSAGING_PHOTO_ATTACHMENT' : 'MESSAGING_FILE_ATTACHMENT';
+  const headers = { ...liHeaders(auth.csrf), 'content-type': 'application/json; charset=UTF-8' };
+
+  // 1) Request upload metadata → { value: { singleUploadUrl, urn } }
+  let metaJson;
+  try {
+    const r = await fetch('https://www.linkedin.com/voyager/api/voyagerVideoDashMediaUploadMetadata?action=upload', {
+      method: 'POST', headers, credentials: 'include',
+      body: JSON.stringify({ mediaUploadType, fileSize, filename: name || 'attachment' }),
+    });
+    if (!r.ok) return { ok: false, reason: `upload metadata HTTP ${r.status}` };
+    metaJson = await r.json();
+  } catch (e) { return { ok: false, reason: 'metadata: ' + (e?.message || 'failed') }; }
+
+  const value = (metaJson && (metaJson.value || (metaJson.data && metaJson.data.value))) || {};
+  const uploadUrl = value.singleUploadUrl || value.uploadUrl;
+  const assetUrn = value.urn || value.asset || value.digitalmediaAsset;
+  if (!uploadUrl || !assetUrn) {
+    return { ok: false, reason: 'metadata missing uploadUrl/urn', debug: JSON.stringify(metaJson).slice(0, 300) };
+  }
+
+  // 2) PUT the raw bytes to the signed upload URL.
+  try {
+    const put = await fetch(uploadUrl, {
+      method: 'PUT', credentials: 'include',
+      headers: { 'content-type': mediaType || 'application/octet-stream' },
+      body: bytes,
+    });
+    if (!put.ok && put.status !== 201) return { ok: false, reason: `upload PUT HTTP ${put.status}` };
+  } catch (e) { return { ok: false, reason: 'PUT: ' + (e?.message || 'failed') }; }
+
+  // 3) The renderContentUnions entry to drop into createMessage.
+  return {
+    ok: true,
+    renderContentUnion: { file: { assetUrn, byteSize: fileSize, mediaType: mediaType || 'application/octet-stream', name: name || 'attachment' } },
+  };
+}
+
+// Upload each attachment, returning renderContentUnions[]. Stops on first error.
+async function uploadAttachments(attachments) {
+  const unions = [];
+  for (const a of (attachments || [])) {
+    const u = await uploadMessagingAttachment(a);
+    if (!u.ok) return { ok: false, reason: `attachment "${a.name || 'file'}": ${u.reason}` };
+    unions.push(u.renderContentUnion);
+  }
+  return { ok: true, unions };
+}
+
 // ── Send a message via LinkedIn's API ────────────────────────────────────────
 // LinkedIn's createMessage endpoint pattern (post-2024 GraphQL):
 //   POST /voyager/api/voyagerMessagingDashMessengerMessages?action=createMessage
 //   Body: { message: { body: {text: "..."}, conversationUrn: "urn:..."},
 //           dedupeByClientGeneratedToken: "<uuid>" }
-async function sendLinkedInMessage({ conversationUrn, body }) {
+async function sendLinkedInMessageRaw({ conversationUrn, body, attachments }) {
   const auth = await getLinkedInAuth();
   if (!auth) return { ok: false, reason: 'not-logged-in' };
 
@@ -391,6 +492,10 @@ async function sendLinkedInMessage({ conversationUrn, body }) {
 
   const headers = { ...liHeaders(auth.csrf), 'content-type': 'application/json; charset=UTF-8' };
 
+  // Upload any attachments first → renderContentUnions entries.
+  const up = await uploadAttachments(attachments);
+  if (!up.ok) return up;
+
   const originToken = crypto.randomUUID
     ? crypto.randomUUID()
     : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -398,8 +503,8 @@ async function sendLinkedInMessage({ conversationUrn, body }) {
   // Payload format captured from LinkedIn's own UI.
   const payload = {
     message: {
-      body: { attributes: [], text: body },
-      renderContentUnions: [],
+      body: { attributes: [], text: body || '' },
+      renderContentUnions: up.unions,
       conversationUrn,
       originToken,
     },
@@ -435,11 +540,14 @@ async function sendLinkedInMessage({ conversationUrn, body }) {
 // ── Create a NEW LinkedIn DM thread (1st-degree connections) ────────────────
 // Same createMessage action used for replies, but with hostRecipientUrns
 // instead of conversationUrn. LinkedIn auto-creates the conversation.
-async function createLinkedInThread({ recipientUrn, body }) {
+async function createLinkedInThreadRaw({ recipientUrn, body, attachments }) {
   const auth = await getLinkedInAuth();
   if (!auth) return { ok: false, reason: 'not-logged-in' };
   if (!recipientUrn) return { ok: false, reason: 'recipientUrn required' };
-  if (typeof body !== 'string' || body.length === 0) return { ok: false, reason: 'body required' };
+  const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
+  if ((typeof body !== 'string' || body.length === 0) && !hasAttachments) {
+    return { ok: false, reason: 'body or attachment required' };
+  }
 
   let mailboxUrn = '';
   try {
@@ -454,12 +562,16 @@ async function createLinkedInThread({ recipientUrn, body }) {
     ? crypto.randomUUID()
     : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
+  // Upload any attachments first → renderContentUnions entries.
+  const up = await uploadAttachments(attachments);
+  if (!up.ok) return up;
+
   // Recipient URN must be fsd_profile-shaped (urn:li:fsd_profile:XXX).
   // sendLinkedInMessage payload re-used with hostRecipientUrns added.
   const payload = {
     message: {
-      body: { attributes: [], text: body },
-      renderContentUnions: [],
+      body: { attributes: [], text: body || '' },
+      renderContentUnions: up.unions,
       originToken,
     },
     mailboxUrn,
@@ -500,7 +612,7 @@ async function createLinkedInThread({ recipientUrn, body }) {
 // given — SN auto-creates the thread. Subject is optional: Relay targets
 // messaging existing connections (where SN treats sends as regular DMs),
 // so we omit it unless the caller explicitly passes one.
-async function createSnInMail({ recipientUrn, subject, body }) {
+async function createSnInMailRaw({ recipientUrn, subject, body }) {
   const auth = await getLinkedInAuth();
   if (!auth) return { ok: false, reason: 'not-logged-in' };
   if (!recipientUrn) return { ok: false, reason: 'recipientUrn required' };
@@ -880,7 +992,60 @@ async function linkedInInitialSyncApi({
 // Payload format captured from SN's own UI (POST salesApiMessageActions):
 //   { createMessageRequest: { body, trackingId, copyToCrm, threadId } }
 // trackingId is 16 random bytes, encoded as a Latin-1 string (each char = 1 byte).
-async function sendSnMessage({ threadId, body }) {
+// Send-dedupe state — see the 'sendMessage' handler. Keyed on
+// (conversationUrn + body); an identical send inside the window is suppressed
+// (returns the original send's result instead of hitting the network again).
+const recentSends = new Map(); // key -> { at: number, promise: Promise }
+const SEND_DEDUPE_MS = 8000;
+
+// Collapse identical sends that fire within the window into ONE network call.
+// A single user "Send" can reach here twice (double-clicked button, button +
+// keyboard, the renderer's ws-bridge relaying twice, or the broker forwarding
+// to two extension peers). LinkedIn/SN both mint a fresh trackingId per call,
+// so the server won't dedupe for us. This is the single network chokepoint
+// every send path funnels through, so guarding here covers all of them.
+function withSendDedup(key, fn) {
+  const now = Date.now();
+  const prior = recentSends.get(key);
+  if (prior && now - prior.at < SEND_DEDUPE_MS) {
+    try { syncLog('send.dedupe.suppressed', { key: key.slice(0, 40) }); } catch {}
+    return prior.promise;
+  }
+  const promise = fn();
+  recentSends.set(key, { at: now, promise });
+  for (const [k, v] of recentSends) {
+    if (now - v.at > SEND_DEDUPE_MS) recentSends.delete(k);
+  }
+  return promise;
+}
+
+function sendSnMessage(args) {
+  return withSendDedup(`sn ${args.threadId} ${args.body}`, () => sendSnMessageRaw(args));
+}
+
+// Attachment signature for the dedup key — so two distinct attachment-only
+// sends (both empty body) to the same thread aren't collapsed into one.
+function attachSig(attachments) {
+  if (!Array.isArray(attachments) || attachments.length === 0) return '';
+  return ' +att:' + attachments.map((a) => `${a.name || ''}:${a.bytesB64 ? a.bytesB64.length : 0}`).join(',');
+}
+
+function sendLinkedInMessage(args) {
+  return withSendDedup(`li ${args.conversationUrn} ${args.body}${attachSig(args.attachments)}`, () => sendLinkedInMessageRaw(args));
+}
+
+// New-thread creation is also a one-time, irreversible side-effect — a
+// duplicated request would create two identical DM/InMail threads. Same
+// dedup as the reply-send path.
+function createLinkedInThread(args) {
+  return withSendDedup(`new-li ${args.recipientUrn} ${args.body}${attachSig(args.attachments)}`, () => createLinkedInThreadRaw(args));
+}
+
+function createSnInMail(args) {
+  return withSendDedup(`new-sn ${args.recipientUrn} ${args.subject || ''} ${args.body}`, () => createSnInMailRaw(args));
+}
+
+async function sendSnMessageRaw({ threadId, body }) {
   const auth = await getLinkedInAuth();
   if (!auth) return { ok: false, reason: 'not-logged-in' };
   if (!threadId) return { ok: false, reason: 'threadId required' };
@@ -1119,8 +1284,21 @@ async function enrichLinkedInProfile({ profileUrn, profileUrl, sourceTabId }) {
   try {
     tab = await chrome.tabs.create({ url: profileUrl, active: true });
     // Mark this tab as app-initiated so the content scripts know they have
-    // explicit consent to run the auto-capture flow (banner + scrape + POST).
+    // explicit consent to run the auto-capture flow (scrape + POST).
     appInitiatedTabs.add(tab.id);
+    // Capture status renders in the Relay side panel (no overlay on LinkedIn).
+    // Chrome forbids programmatically OPENING the panel without an in-extension
+    // user gesture, so we enable it for this tab and nudge the user to open it.
+    try { chrome.sidePanel.setOptions({ tabId: tab.id, path: 'sidepanel.html', enabled: true }); } catch {}
+    try {
+      chrome.notifications.create(`relay-capture-${tab.id}`, {
+        type: 'basic',
+        iconUrl: 'icons/128.png',
+        title: 'Capturing profile',
+        message: 'Open the Relay side panel to watch progress.',
+        priority: 0,
+      });
+    } catch {}
     await waitForTabComplete(tab.id, 25_000);
     // The Refresh-profile path uses user-driven capture (banner + scroll +
     // observer + 5s countdown). The user paces it themselves, so we need
@@ -1757,25 +1935,44 @@ async function recoverMissingMessages({ onProgress }) {
 // Spam-filter posture: zero LinkedIn API calls. We open the Connections page
 // (something the user does themselves all the time), scroll it, and read
 // rendered DOM. Indistinguishable from a user browsing their network.
-async function harvestConnectionUrls(onProgress) {
+async function harvestConnectionUrls(onProgress, opts = {}) {
   const auth = await getLinkedInAuth();
   if (!auth) return { ok: false, reason: 'not-logged-in' };
 
-  syncLog('harvest.start', {});
-  onProgress?.('Opening Connections page…');
+  // Incremental by default: fetch the slugs we already have so the in-tab
+  // sweep can stop once it reaches already-synced connections. Full resync
+  // ignores the watermark and walks the whole list.
+  const fullResync = !!opts.fullResync;
+  let knownSlugs = [];
+  if (!fullResync) {
+    try {
+      const r = await fetch(`${INBOXPRO_URL}/api/connections/known`);
+      if (r.ok) knownSlugs = (await r.json())?.slugs ?? [];
+    } catch { /* fall through to full sweep */ }
+  }
 
-  // Open the connections page in a hidden tab
+  syncLog('harvest.start', { fullResync, known: knownSlugs.length });
+  onProgress?.(fullResync ? 'Full resync — opening Connections…' : `Opening Connections page… (${knownSlugs.length} known)`);
+
+  // Open the connections page ACTIVE. Hidden/background tabs don't run
+  // LinkedIn's React, so its connections API never fires and our content-script
+  // intercept (which captures connectedAt + company + avatar) gets nothing —
+  // and the DOM scrape only sees nav junk. Active = the page actually loads.
+  // We remember the previously-focused tab and restore it when we're done.
+  let priorTabId = null;
+  try { const [a] = await chrome.tabs.query({ active: true, lastFocusedWindow: true }); priorTabId = a?.id ?? null; } catch {}
   const tab = await chrome.tabs.create({
     url: 'https://www.linkedin.com/mynetwork/invite-connect/connections/',
-    active: false,
+    active: true,
   });
   if (!tab?.id) return { ok: false, reason: 'failed to open tab' };
 
   // Wait for the page to be ready
   try {
     await waitForTabComplete(tab.id, 30_000);
-    // React render delay
-    await new Promise((r) => setTimeout(r, 2000));
+    // React render delay — give the connections API call time to fire so the
+    // content script can capture the rich payload before we scrape/scroll.
+    await new Promise((r) => setTimeout(r, 2500));
   } catch (e) {
     try { chrome.tabs.remove(tab.id); } catch {}
     return { ok: false, reason: 'page never loaded — ' + (e?.message || 'timeout') };
@@ -1789,6 +1986,7 @@ async function harvestConnectionUrls(onProgress) {
     const [result] = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       func: scrollAndCollectProfiles,
+      args: [knownSlugs, 25],
     });
     const raw = result?.result ?? {};
     collected = raw.items ?? [];
@@ -1801,6 +1999,8 @@ async function harvestConnectionUrls(onProgress) {
   }
 
   try { chrome.tabs.remove(tab.id); } catch {}
+  // Return focus to wherever the user was before the sweep stole it.
+  if (priorTabId != null) { try { await chrome.tabs.update(priorTabId, { active: true }); } catch {} }
 
   syncLog('harvest.collected', { count: collected.length });
   onProgress?.(`Captured ${collected.length} links — matching to contacts…`);
@@ -1869,13 +2069,25 @@ function waitForTabComplete(tabId, timeoutMs) {
 // Runs IN the connections page's context (via chrome.scripting.executeScript).
 // Scrolls + collects every <a href="/in/<slug>/"> with the surrounding name.
 // Stops when no new links appear for several rounds OR the hard timeout fires.
-function scrollAndCollectProfiles() {
+function scrollAndCollectProfiles(knownSlugs, stopThreshold) {
   return new Promise(async (resolve) => {
     const results = new Map(); // normalized URL → display name
     const rawSamples = []; // first 5 anchors with their context, for debug
     const startedAt = Date.now();
     const MAX_TIME_MS = 15 * 60 * 1000;
     const MAX_STABLE_ROUNDS = 8;
+
+    // Incremental watermark. The Connections page is newest-first, so once we
+    // pass a run of slugs we already have, everything below is already synced.
+    // knownSlugs empty => full sweep (today's behavior / "Full resync").
+    const knownSet = new Set((knownSlugs || []).map((s) => String(s).toLowerCase()));
+    const threshold = stopThreshold || 25;
+    let consecutiveKnown = 0;
+    let shouldStop = false;
+    function slugOf(u) {
+      const m = String(u).match(/\/in\/([^/?#]+)/);
+      return m ? m[1].toLowerCase() : '';
+    }
 
     function normalizeUrl(href) {
       try {
@@ -1978,6 +2190,21 @@ function scrollAndCollectProfiles() {
         const url = normalizeUrl(a.href);
         if (!url) continue;
         if (results.has(url)) continue;
+
+        // Watermark: count consecutive already-known slugs in scroll order.
+        // A run of `threshold` known in a row means we've reached connections
+        // we already have → stop the sweep. New connections (incl. any made
+        // after a CSV upload) sit above this run, so they're collected first.
+        if (knownSet.size > 0) {
+          const slug = slugOf(url);
+          if (slug && knownSet.has(slug)) {
+            consecutiveKnown++;
+            if (consecutiveKnown >= threshold) shouldStop = true;
+          } else {
+            consecutiveKnown = 0;
+          }
+        }
+
         const name = extractName(a);
 
         // Capture a few raw samples for diagnostics (first 5 ever seen)
@@ -2048,9 +2275,10 @@ function scrollAndCollectProfiles() {
     let stable = 0;
     let prev = 0;
     let rounds = 0;
-    while (Date.now() - startedAt < MAX_TIME_MS && stable < MAX_STABLE_ROUNDS) {
+    while (Date.now() - startedAt < MAX_TIME_MS && stable < MAX_STABLE_ROUNDS && !shouldStop) {
       rounds++;
       harvest();
+      if (shouldStop) break;
       clickShowMore();
       aggressiveScroll();
       await new Promise((r) => setTimeout(r, 1800));
@@ -2064,6 +2292,8 @@ function scrollAndCollectProfiles() {
       items: Array.from(results.entries()).map(([url, name]) => ({ url, name })),
       samples: {
         rounds,
+        stoppedEarly: shouldStop,
+        knownCount: knownSet.size,
         anchorCount: document.querySelectorAll('a[href*="/in/"]').length,
         href: location.href.slice(-100),
         firstFew: rawSamples,
@@ -2197,17 +2427,23 @@ const SN_ALARM = 'relay-sn-sync';
 // shape drifts under our scrapers (success rate cratering on any source).
 const PARSER_HEALTH_ALARM = 'relay-parser-health';
 const PARSER_HEALTH_PERIOD_MIN = 24 * 60; // 1 day
+// Media drain: downloads message attachment bytes (images/files/audio/video)
+// from LinkedIn's signed URLs while the user's auth is valid, and POSTs them
+// to the app so they're viewable durably in Relay (URLs expire). Every 4 min.
+const MEDIA_ALARM = 'relay-media-drain';
 chrome.runtime.onInstalled.addListener(() => {
   chrome.alarms.create(ALARM_NAME, { periodInMinutes: 5 });
   chrome.alarms.create(ENRICH_ALARM, { periodInMinutes: 15 });
   chrome.alarms.create(SN_ALARM, { delayInMinutes: 0.1, periodInMinutes: 3 });
   chrome.alarms.create(PARSER_HEALTH_ALARM, { delayInMinutes: 5, periodInMinutes: PARSER_HEALTH_PERIOD_MIN });
+  chrome.alarms.create(MEDIA_ALARM, { delayInMinutes: 0.5, periodInMinutes: 4 });
 });
 chrome.runtime.onStartup.addListener(() => {
   chrome.alarms.create(ALARM_NAME, { periodInMinutes: 5 });
   chrome.alarms.create(ENRICH_ALARM, { periodInMinutes: 15 });
   chrome.alarms.create(SN_ALARM, { delayInMinutes: 0.1, periodInMinutes: 3 });
   chrome.alarms.create(PARSER_HEALTH_ALARM, { delayInMinutes: 5, periodInMinutes: PARSER_HEALTH_PERIOD_MIN });
+  chrome.alarms.create(MEDIA_ALARM, { delayInMinutes: 0.5, periodInMinutes: 4 });
 });
 // Resolves "LinkedIn User" placeholder convs by hitting voyager's identity
 // dash endpoint per participant URN. Cheap (single API call per conv, no
@@ -2269,6 +2505,54 @@ async function resolvePlaceholderUrns() {
   }
 }
 
+// ── Media drain ───────────────────────────────────────────────────────────
+// Pull the list of attachments whose bytes we don't have yet, fetch each from
+// LinkedIn (the SW shares the user's cookies via host_permissions), and POST
+// the bytes to the app. Sequential + capped so it never hammers LinkedIn. A
+// fetch failure (expired/403 URL) is reported back so the app stops offering
+// that item — no infinite retry. No UI, no overlays, no auto-send.
+let mediaDraining = false;
+async function drainPendingMedia() {
+  if (mediaDraining) return;
+  mediaDraining = true;
+  try {
+    let list;
+    try {
+      const r = await fetch(`${INBOXPRO_URL}/api/media/pending?limit=40`);
+      if (!r.ok) return;
+      list = (await r.json())?.pending;
+    } catch { return; }
+    if (!Array.isArray(list) || list.length === 0) return;
+    syncLog('mediaDrain.start', { count: list.length });
+
+    let ok = 0, failed = 0;
+    for (const item of list) {
+      const qs = `messageId=${encodeURIComponent(item.messageId)}&i=${item.index}`;
+      try {
+        const resp = await fetch(item.remoteUrl, { credentials: 'include' });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const bytes = await resp.arrayBuffer();
+        if (!bytes || bytes.byteLength === 0) throw new Error('empty');
+        const up = await fetch(`${INBOXPRO_URL}/api/media/ingest?${qs}`, {
+          method: 'POST',
+          headers: { 'Content-Type': item.mediaType || 'application/octet-stream' },
+          body: bytes,
+        });
+        if (up.ok) ok++; else failed++;
+      } catch {
+        // Mark as tried-and-unavailable so /api/media/pending drops it.
+        try { await fetch(`${INBOXPRO_URL}/api/media/ingest?${qs}&failed=1`, { method: 'POST' }); } catch {}
+        failed++;
+      }
+      // Gentle pacing — ~human, avoids bursts against LinkedIn's CDN.
+      await new Promise((res) => setTimeout(res, 400));
+    }
+    syncLog('mediaDrain.done', { ok, failed });
+  } finally {
+    mediaDraining = false;
+  }
+}
+
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === ALARM_NAME) {
     syncLog('alarm.fire', { name: alarm.name });
@@ -2294,6 +2578,10 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     syncLog('alarm.fire', { name: alarm.name });
     checkParserHealth().catch((e) => {
       syncLog('parserHealth.error', { err: e?.message });
+    });
+  } else if (alarm.name === MEDIA_ALARM) {
+    drainPendingMedia().catch((e) => {
+      syncLog('mediaDrain.error', { err: e?.message });
     });
   }
 });
@@ -2335,6 +2623,7 @@ async function checkParserHealth() {
     showNotification({
       title: 'Relay: parser health degraded',
       body: `${s.source} success rate ${pct}% over the last 24h. LinkedIn may have changed its shape — check Diagnostics → Parser health.`,
+      kind: 'parser-health',
     });
     lastFiredMap[s.source] = now;
     firedAny = true;
@@ -2684,6 +2973,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       title: message.title,
       body: message.body,
       convId: message.convId,
+      kind: message.kind || 'new-message',
     });
     sendResponse({ ok: true });
     return false;
@@ -2918,13 +3208,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'sendMessage') {
     (async () => {
       // Route by conv id: SN convs start with "sn:"; everything else is LinkedIn.
+      // Dedup lives inside sendSnMessage/sendLinkedInMessage (the network
+      // chokepoint), so it covers every caller including the WS path.
       const isSnConv = typeof message.conversationUrn === 'string' && message.conversationUrn.startsWith('sn:');
       const result = isSnConv
         ? await sendSnMessage({ threadId: message.conversationUrn, body: message.body })
-        : await sendLinkedInMessage({
-            conversationUrn: message.conversationUrn,
-            body: message.body,
-          });
+        : await sendLinkedInMessage({ conversationUrn: message.conversationUrn, body: message.body, attachments: message.attachments });
       sendResponse(result);
     })();
     return true;
@@ -2948,7 +3237,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       const result = await harvestConnectionUrls((msg) => {
         broadcastToRelay({ action: 'refresh-progress', message: msg });
-      });
+      }, { fullResync: !!message.fullResync });
       sendResponse(result);
     })();
     return true;
@@ -3026,6 +3315,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           result = await createLinkedInThread({
             recipientUrn: message.recipientUrn,
             body: message.body,
+            attachments: message.attachments,
           });
         } else if (message.channel === 'sn') {
           result = await createSnInMail({

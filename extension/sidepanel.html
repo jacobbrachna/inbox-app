@@ -106,6 +106,17 @@
     </div>
   </div>
 
+  <!-- Capture status — shown during a Refresh-profile capture. Replaces the
+       old popup that used to render over LinkedIn. -->
+  <div class="section hidden" id="captureSection">
+    <div class="section-label">Capturing profile</div>
+    <div class="card">
+      <div class="profile-headline" id="captureStatus">Reading this profile…</div>
+      <div class="row" id="captureChecklist" style="margin-top:8px; flex-wrap:wrap; gap:6px;"></div>
+      <button class="btn small" id="captureDoneBtn" style="margin-top:10px;">Done — use what we have</button>
+    </div>
+  </div>
+
   <!-- On this profile -->
   <div class="section">
     <div class="section-label">On this profile</div>
@@ -139,6 +150,11 @@
       <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
       Sync Sales Navigator
     </button>
+    <button class="btn secondary" id="connSyncBtn">
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="8.5" cy="7" r="4"></circle><path d="M20 8v6M23 11h-6"></path></svg>
+      Sync connections
+    </button>
+    <button id="connFullBtn" style="background:none;border:0;color:var(--text-muted);font:inherit;font-size:11px;cursor:pointer;padding:2px 0;text-decoration:underline;text-underline-offset:2px;">Full resync (slower)</button>
     <div class="progress" id="progress"></div>
     <div class="hint" id="hint" style="display:none"></div>
   </div>

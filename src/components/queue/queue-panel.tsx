@@ -244,7 +244,7 @@ function QueueRow({
         )}
       </div>
       <div className="min-w-0 flex-1">
-        <div className="flex items-baseline gap-2">
+        <div className="flex items-baseline gap-2 min-w-0">
           <span className="text-[13px] font-medium text-[var(--color-text-primary)] truncate">{item.name}</span>
           {item.company && (
             <span className="text-[11px] text-[var(--color-text-tertiary)] truncate">· {item.company}</span>

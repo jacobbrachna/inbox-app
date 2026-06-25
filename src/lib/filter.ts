@@ -24,6 +24,13 @@ export function filterConversations(
     ? conversations.filter((c) => c.status === 'draft')
     : nonDrafts;
 
+  // `has:attachment` search token — combinable with text and any view. Strip
+  // it from the query and require attachments below. The dedicated
+  // 'attachments' filter view applies the same requirement.
+  const wantsAttachment =
+    activeFilter === 'attachments' || /\bhas:attachments?\b/i.test(searchQuery);
+  const textQuery = searchQuery.replace(/\bhas:attachments?\b/ig, '').trim();
+
   // Current-role toggle — pre-filter to threads with activity since the
   // user's role start. Skip for drafts (they're new outbound, not historic).
   if (currentRoleStart && activeFilter !== 'drafts') {
@@ -35,8 +42,9 @@ export function filterConversations(
     // Already filtered above; apply search if any, then return early so we
     // don't fall through any of the other branches (most would no-op anyway
     // but explicit is safer as we add filters later).
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
+    if (wantsAttachment) result = result.filter((c) => c.hasAttachments);
+    if (textQuery) {
+      const q = textQuery.toLowerCase();
       result = result.filter(
         (c) =>
           c.participants.some((p) => p.name.toLowerCase().includes(q)) ||
@@ -112,8 +120,12 @@ export function filterConversations(
     result = result.filter((c) => c.status !== 'archived');
   }
 
-  if (searchQuery.trim()) {
-    const q = searchQuery.toLowerCase();
+  // Attachments requirement (the 'attachments' view or a `has:attachment`
+  // token). Applied after the view filter so it composes with any view.
+  if (wantsAttachment) result = result.filter((c) => c.hasAttachments);
+
+  if (textQuery) {
+    const q = textQuery.toLowerCase();
     result = result.filter(
       (c) =>
         c.participants.some((p) => p.name.toLowerCase().includes(q)) ||

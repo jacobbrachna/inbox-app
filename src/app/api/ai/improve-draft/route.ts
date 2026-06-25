@@ -17,7 +17,13 @@ import {
 // Returns 2-4 specific, actionable suggestions + one optionally-improved version.
 export async function POST(req: NextRequest) {
   try {
-    const { conversationId, draft } = await req.json();
+    const body = await req.json();
+    const { conversationId, draft } = body;
+    // Optional steering from the user — "keep the apology", "don't say compare
+    // notes". Treated as authoritative instructions for THIS revision.
+    const extraContext = typeof body?.extraContext === 'string'
+      ? body.extraContext.trim().slice(0, 1200)
+      : '';
     if (!conversationId || typeof draft !== 'string' || !draft.trim()) {
       return NextResponse.json({ error: 'conversationId and draft required' }, { status: 400, headers: CORS });
     }
@@ -79,7 +85,12 @@ export async function POST(req: NextRequest) {
       '• If the sender context or reference material has a specific stat / value-prop that ties to the recipient\'s situation, suggest using it (cite verbatim).',
       '• If the draft is already strong, say so — don\'t invent problems.',
       '• Don\'t suggest emojis or corporate fluff.',
+      '',
+      'VOICE (always enforce in the improved version):',
+      '• NEVER use em dashes (—) or en dashes (–). Use commas, periods, or restructure the sentence. This is a hard rule.',
+      '• Sound like a person messaging a colleague, not marketing copy. No buzzwords ("synergy", "circle back", "touch base", "leverage").',
       styleNote ? `\nUser's style note: "${styleNote}"` : '',
+      extraContext ? `\nDIRECT INSTRUCTIONS from ${myName} for this specific revision (treat as authoritative — follow exactly, even over the suggestions above):\n${extraContext}` : '',
       senderBlock,
       docsBlock,
       contextBlock,

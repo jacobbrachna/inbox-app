@@ -3,8 +3,10 @@ import { useState, useEffect, useRef } from 'react';
 import {
   Send, Star, Clock, Archive, ArchiveRestore, Tag, ExternalLink, Download, Trash2, Sparkles,
   MessageSquare, X, Check, AlertCircle, BellRing, StickyNote, ChevronDown, ChevronRight, Calendar,
-  Pencil, ThumbsDown,
+  Pencil, ThumbsDown, FileText, Mic, Film, Image as ImageIcon, Users, Paperclip,
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+import type { MessageAttachment } from '@/types';
 import { cn } from '@/lib/cn';
 import { hueForName } from '@/lib/color-for-name';
 import { isExtensionReady } from '@/lib/use-extension-ready';
@@ -188,6 +190,85 @@ function DateDivider({ date }: { date: Date }) {
   );
 }
 
+// ─── Attachments ────────────────────────────────────────────────────────────
+
+function fmtBytes(n?: number): string {
+  if (!n || n <= 0) return '';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+function fmtDuration(ms?: number): string {
+  if (!ms || ms <= 0) return '';
+  const s = Math.round(ms / 1000);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+function mediaSrc(localPath?: string): string | null {
+  return localPath && localPath.length > 0 ? `/api/media/${encodeURIComponent(localPath)}` : null;
+}
+
+function AttachmentChip({ Icon, title, subtitle }: { Icon: LucideIcon; title: string; subtitle?: string }) {
+  return (
+    <div className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-hairline)] max-w-[260px]">
+      <Icon className="w-4 h-4 text-[var(--color-text-tertiary)] flex-shrink-0" />
+      <div className="min-w-0 text-left">
+        <div className="text-[12.5px] text-[var(--color-text-primary)] truncate">{title}</div>
+        {subtitle && <div className="text-[10.5px] text-[var(--color-text-tertiary)] truncate">{subtitle}</div>}
+      </div>
+    </div>
+  );
+}
+
+// Render a message's media. Bytes load from /api/media/<localPath> once the
+// extension has downloaded them; until then (or if LinkedIn's URL expired) we
+// fall back to a metadata chip — never a broken image.
+function MessageAttachments({ attachments, isMe }: { attachments: MessageAttachment[]; isMe: boolean }) {
+  return (
+    <div className={cn('flex flex-col gap-2', isMe && 'items-end')}>
+      {attachments.map((a, i) => {
+        const local = mediaSrc(a.localPath);
+
+        if (a.kind === 'image') {
+          const src = local ?? (a.remoteUrl || null);
+          if (src) {
+            return (
+              <a key={i} href={src} target="_blank" rel="noreferrer"
+                 className="block max-w-[260px] rounded-xl overflow-hidden border border-[var(--color-hairline)]">
+                <img src={src} alt="" className="block w-full h-auto object-cover"
+                     onError={(e) => { const a = (e.currentTarget.closest('a') as HTMLElement | null); if (a) a.style.display = 'none'; }} />
+              </a>
+            );
+          }
+          return <AttachmentChip key={i} Icon={ImageIcon} title="Image" subtitle="Unavailable — open in LinkedIn" />;
+        }
+
+        if (a.kind === 'audio') {
+          if (local) return <audio key={i} controls src={local} className="max-w-[260px]" />;
+          return <AttachmentChip key={i} Icon={Mic} title="Voice message" subtitle={fmtDuration(a.durationMs) || 'Downloading…'} />;
+        }
+
+        if (a.kind === 'video') {
+          if (local) {
+            return <video key={i} controls src={local} poster={mediaSrc(a.thumbLocalPath) ?? undefined} className="max-w-[280px] rounded-xl" />;
+          }
+          return <AttachmentChip key={i} Icon={Film} title="Video" subtitle={fmtDuration(a.durationMs) || 'Downloading…'} />;
+        }
+
+        // file
+        const sub = [a.mediaType?.split('/').pop()?.toUpperCase(), fmtBytes(a.byteSize)].filter(Boolean).join(' · ');
+        if (local) {
+          return (
+            <a key={i} href={local} download={a.name ?? undefined} className="no-underline">
+              <AttachmentChip Icon={FileText} title={a.name ?? 'File'} subtitle={sub} />
+            </a>
+          );
+        }
+        return <AttachmentChip key={i} Icon={FileText} title={a.name ?? 'File'} subtitle={sub || 'Open in LinkedIn'} />;
+      })}
+    </div>
+  );
+}
+
 function MessageBubble({
   message,
   isLast,
@@ -198,6 +279,8 @@ function MessageBubble({
   otherAvatarUrl?: string;
 }) {
   const isMe = message.isFromMe;
+  const atts = message.attachments ?? [];
+  const hasBody = !!message.body && message.body.trim().length > 0;
   return (
     <div className={cn('row-in flex gap-3 mb-4', isMe && 'flex-row-reverse')}>
       {!isMe && (
@@ -212,16 +295,19 @@ function MessageBubble({
         {!isMe && (
           <span className="text-[11px] font-medium text-[var(--color-text-tertiary)] px-1">{message.senderName}</span>
         )}
-        <div
-          className={cn(
-            'px-4 py-3 rounded-2xl text-[13.5px] leading-relaxed whitespace-pre-wrap break-words',
-            isMe
-              ? 'bg-[var(--color-bubble-own)] text-[var(--color-bubble-own-fg)] rounded-br-sm'
-              : 'bg-[var(--color-bubble-them)] text-[var(--color-text-primary)] rounded-bl-sm',
-          )}
-        >
-          {message.body}
-        </div>
+        {hasBody && (
+          <div
+            className={cn(
+              'px-4 py-3 rounded-2xl text-[13.5px] leading-relaxed whitespace-pre-wrap break-words',
+              isMe
+                ? 'bg-[var(--color-bubble-own)] text-[var(--color-bubble-own-fg)] rounded-br-sm'
+                : 'bg-[var(--color-bubble-them)] text-[var(--color-text-primary)] rounded-bl-sm',
+            )}
+          >
+            {message.body}
+          </div>
+        )}
+        {atts.length > 0 && <MessageAttachments attachments={atts} isMe={isMe} />}
         <span className="mono text-[10px] text-[var(--color-text-tertiary)] px-1">
           {format(new Date(message.sentAt), 'h:mm a')}
         </span>
@@ -542,12 +628,26 @@ export function MessageThread() {
   const [improveSuggestions, setImproveSuggestions] = useState<string[]>([]);
   const [improveImproved, setImproveImproved] = useState<string | null>(null);
   const [improveBaseline, setImproveBaseline] = useState<{ replyRate: number; sent: number } | null>(null);
+  // Free-text steering for the AI Improve pass — "keep the apology", "don't say
+  // compare notes". Sent as authoritative instructions on the next re-improve.
+  const [improveSteer, setImproveSteer] = useState('');
   const [composeFocused, setComposeFocused] = useState(false);
+  // Staged attachments to send (LinkedIn DM only). Read as base64 in the
+  // renderer, shipped to the extension which uploads them to LinkedIn.
+  const [pendingAttachments, setPendingAttachments] = useState<{ name: string; mediaType: string; bytesB64: string; size: number }[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const MAX_ATTACH_BYTES = 15 * 1024 * 1024;
   // Briefly flash the textarea when a snippet shortcut auto-expands so the
   // user sees the insertion register.
   const [snippetFlashKey, setSnippetFlashKey] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // Synchronous re-entrancy lock for sending. The Send button's `disabled`
+  // prop only updates on the next render, so a same-tick double dispatch
+  // (double-click, or button click + ⌘↵) can call handleSend twice before
+  // React disables it. This ref blocks the second call immediately. Lifecycle
+  // is tied 1:1 to the `sending` state below.
+  const sendingRef = useRef(false);
   // Debounce typing fires to ~3s — LinkedIn shows the indicator for ~5s after
   // each request, so a 3s heartbeat keeps it visible without spamming.
   const lastTypingAtRef = useRef<number>(0);
@@ -605,6 +705,14 @@ export function MessageThread() {
     setDraftChannel(null);
     setDraftsExtraContext('');
     setShowDraftsContextInput(false);
+    // AI Improve is per-thread too — don't bleed steering, suggestions, or the
+    // improved draft from one conversation into the next.
+    setShowImprove(false);
+    setImproveSuggestions([]);
+    setImproveImproved(null);
+    setImproveSteer('');
+    setImproveError(null);
+    setPendingAttachments([]);
   }, [activeConversationId]);
 
   // When user picks a recipient from typeahead, first check if they
@@ -780,7 +888,11 @@ export function MessageThread() {
       const r = await fetch('/api/ai/improve-draft', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conversationId: activeConversationId, draft: replyText }),
+        body: JSON.stringify({
+          conversationId: activeConversationId,
+          draft: replyText,
+          extraContext: improveSteer.trim() || undefined,
+        }),
       });
       if (!r.ok) {
         const err = await r.json().catch(() => ({}));
@@ -799,8 +911,45 @@ export function MessageThread() {
     }
   }
 
+  function fileToBase64(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => {
+        const res = r.result as string; // data:<mime>;base64,XXXX
+        resolve(res.slice(res.indexOf(',') + 1));
+      };
+      r.onerror = () => reject(r.error);
+      r.readAsDataURL(file);
+    });
+  }
+  async function onPickFiles(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    setSendError(null);
+    const next: typeof pendingAttachments = [];
+    for (const f of Array.from(files)) {
+      if (f.size > MAX_ATTACH_BYTES) { setSendError(`"${f.name}" is too large (max 15 MB).`); continue; }
+      try {
+        const bytesB64 = await fileToBase64(f);
+        next.push({ name: f.name, mediaType: f.type || 'application/octet-stream', bytesB64, size: f.size });
+      } catch { setSendError(`Couldn't read "${f.name}".`); }
+    }
+    if (next.length) setPendingAttachments((p) => [...p, ...next]);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  }
+  function removeAttachment(idx: number) {
+    setPendingAttachments((p) => p.filter((_, i) => i !== idx));
+  }
+  // Attachments are LinkedIn-DM only for now (no SN upload). Hide the control
+  // for SN threads / a Sales Nav draft.
+  const attachmentsSupported = isDraft
+    ? draftChannel !== 'sn'
+    : !String(activeConversationId ?? '').startsWith('sn:');
+
   async function handleSend() {
-    if (!replyText.trim() || !activeConversationId) return;
+    if ((!replyText.trim() && pendingAttachments.length === 0) || !activeConversationId) return;
+    // Re-entrancy lock — bail if a send is already in flight (synchronous,
+    // unlike the button's disabled prop which lags a render).
+    if (sendingRef.current) return;
     if (!isExtensionReady()) {
       setSendError('Relay extension not detected. Reload extension and refresh.');
       return;
@@ -814,6 +963,11 @@ export function MessageThread() {
       if (!primary) { setSendError('Pick a recipient first.'); return; }
       if (!primary.id) { setSendError('Recipient has no LinkedIn URN. Visit their profile once to capture it.'); return; }
       if (!draftChannel) { setSendError('Pick a channel (LinkedIn DM or Sales Nav).'); return; }
+      if (draftChannel === 'sn' && pendingAttachments.length > 0) {
+        setSendError('Attachments are LinkedIn-only for now. Remove them or switch to LinkedIn DM.');
+        return;
+      }
+      sendingRef.current = true;
       setSending(true);
       setSendError(null);
       const body = replyText.trim();
@@ -830,11 +984,14 @@ export function MessageThread() {
             await loadFromServer();
             setActiveConversationId(null);
             setActiveFilter('all');
+            setPendingAttachments([]);
+            sendingRef.current = false;
             setSending(false);
             setSentFlash(true);
             setTimeout(() => setSentFlash(false), 1200);
           })();
         } else {
+          sendingRef.current = false;
           setSending(false);
           setSendError(r?.reason || 'Send failed.');
         }
@@ -846,6 +1003,7 @@ export function MessageThread() {
         channel: draftChannel,
         recipientUrn: primary.id,
         recipientName: primary.name,
+        attachments: draftChannel === 'linkedin' && pendingAttachments.length > 0 ? pendingAttachments : undefined,
         // Subject intentionally omitted — Relay targets messaging
         // existing connections, where LinkedIn doesn't require one.
         subject: null,
@@ -853,6 +1011,7 @@ export function MessageThread() {
       }, '*');
       setTimeout(() => {
         window.removeEventListener('message', onResult);
+        sendingRef.current = false;
         setSending((s) => {
           if (s) setSendError('Send timed out. Check the extension.');
           return false;
@@ -861,13 +1020,24 @@ export function MessageThread() {
       return;
     }
 
+    // Attachments are LinkedIn-DM only for now (no SN upload).
+    if (String(activeConversationId).startsWith('sn:') && pendingAttachments.length > 0) {
+      setSendError('Attachments are LinkedIn-only for now.');
+      return;
+    }
+
+    sendingRef.current = true;
     setSending(true);
     setSendError(null);
 
     const text = replyText.trim();
     const convId = activeConversationId;
+    const atts = pendingAttachments;
 
-    // Optimistic: add to UI immediately
+    // Optimistic: add to UI immediately — including any attachments, rendered
+    // straight from the bytes we just picked (data URL for images, a name/size
+    // chip for files) so they show instantly instead of waiting for the next
+    // sync to download them back.
     const optimistic: Message = {
       id: `optimistic-${Date.now()}`,
       conversationId: convId,
@@ -876,9 +1046,23 @@ export function MessageThread() {
       body: text,
       sentAt: new Date().toISOString(),
       isFromMe: true,
+      attachments: atts.length > 0
+        ? atts.map((a) => ({
+            kind: /^image\//.test(a.mediaType) ? 'image' as const
+              : /^audio\//.test(a.mediaType) ? 'audio' as const
+              : /^video\//.test(a.mediaType) ? 'video' as const
+              : 'file' as const,
+            name: a.name,
+            mediaType: a.mediaType,
+            byteSize: a.size,
+            // Images render immediately from a local data URL; files show a chip.
+            remoteUrl: /^image\//.test(a.mediaType) ? `data:${a.mediaType};base64,${a.bytesB64}` : undefined,
+          }))
+        : undefined,
     };
     setMessages(convId, [...threadMessages, optimistic]);
     setReplyText('');
+    setPendingAttachments([]);
     textareaRef.current?.focus();
 
     // Send via extension bridge → LinkedIn API
@@ -888,6 +1072,7 @@ export function MessageThread() {
       if (ev.data.type !== 'relay-send-result' || ev.data.requestId !== requestId) return;
       window.removeEventListener('message', onResult);
       const r = ev.data.response;
+      sendingRef.current = false;
       setSending(false);
       if (r?.ok) {
         // Success — message is on LinkedIn. The next sync will pull the real one.
@@ -905,12 +1090,14 @@ export function MessageThread() {
       type: 'relay-send-message',
       conversationUrn: convId,
       body: text,
+      attachments: atts.length > 0 ? atts : undefined,
       requestId,
     }, '*');
 
     // Safety timeout
     setTimeout(() => {
       window.removeEventListener('message', onResult);
+      sendingRef.current = false;
       setSending((s) => {
         if (s) setSendError('Send timed out. Check the extension.');
         return false;
@@ -1029,7 +1216,16 @@ export function MessageThread() {
           ) : (
             <div className={cn('contents', isDraft && 'row-in')}>
               <div className="flex items-center gap-2 min-w-0">
-                <h3 className="text-[15px] font-semibold tracking-tight text-[var(--color-text-primary)] truncate min-w-0">{primary?.name}</h3>
+                <h3 className="text-[15px] font-semibold tracking-tight text-[var(--color-text-primary)] truncate min-w-0">
+                  {convo?.isGroup
+                    ? (convo.groupName || `Group · ${convo.memberCount ?? convo.participants.length} people`)
+                    : primary?.name}
+                </h3>
+                {!isDraft && convo?.isGroup && (
+                  <span className="eyebrow text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--color-surface-2)] text-[var(--color-text-secondary)] flex-shrink-0 inline-flex items-center gap-1">
+                    <Users className="w-2.5 h-2.5" /> Group
+                  </span>
+                )}
                 {isDraft && (
                   <span className="eyebrow text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--color-accent-soft)] text-[var(--color-accent-fg)] flex-shrink-0">Draft</span>
                 )}
@@ -1040,11 +1236,15 @@ export function MessageThread() {
                   <button onClick={clearRecipient} className="text-[10.5px] text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] underline-offset-2 hover:underline">Change</button>
                 )}
               </div>
-              {primary?.headline && (
+              {convo?.isGroup ? (
+                <p className="text-[12px] text-[var(--color-text-tertiary)] truncate">
+                  {convo.participants.map((p) => p.name).filter(Boolean).join(', ')}
+                </p>
+              ) : primary?.headline ? (
                 <p className="text-[12px] text-[var(--color-text-tertiary)] truncate">{primary.headline}</p>
-              )}
+              ) : null}
               {convoLabels.length > 0 && (
-                <div className="flex gap-1 mt-1 overflow-hidden">
+                <div className="flex gap-1 mt-1 overflow-hidden min-w-0 flex-wrap">
                   {convoLabels.map((l) => <Badge key={l.id} label={l.name} color={l.color} />)}
                 </div>
               )}
@@ -1264,13 +1464,18 @@ export function MessageThread() {
             && msgDate.getFullYear() === prevDate.getFullYear()
             && msgDate.getMonth() === prevDate.getMonth()
             && msgDate.getDate() === prevDate.getDate();
+          // In a group, each bubble should show its own sender's avatar, not
+          // the single "primary" participant. Match by sender URN, then name.
+          const senderAvatar = convo?.isGroup
+            ? (convo.participants.find((p) => p.id === msg.senderId || p.name === msg.senderName)?.avatarUrl ?? undefined)
+            : primary?.avatarUrl;
           return (
             <div key={msg.id}>
               {!sameDay && <DateDivider date={msgDate} />}
               <MessageBubble
                 message={msg}
                 isLast={i === threadMessages.length - 1}
-                otherAvatarUrl={primary?.avatarUrl}
+                otherAvatarUrl={senderAvatar}
               />
             </div>
           );
@@ -1375,6 +1580,34 @@ export function MessageThread() {
               )}
               {!improveLoading && !improveError && improveSuggestions.length === 0 && !improveImproved && (
                 <div className="px-4 py-3 text-[12px] text-[var(--color-text-tertiary)]">No suggestions — your draft looks good as-is.</div>
+              )}
+              {/* Steering — tell the AI what to change, then re-run the pass.
+                  "keep the apology", "don't say compare notes", etc. */}
+              {!improveLoading && (
+                <div className="px-4 py-2.5 border-t border-[var(--color-hairline)] bg-[var(--color-surface)]">
+                  <div className="flex items-end gap-2">
+                    <textarea
+                      value={improveSteer}
+                      onChange={(e) => setImproveSteer(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); requestImprove(); }
+                      }}
+                      rows={1}
+                      placeholder="Tell it what to change — e.g. “keep the apology”, “don't say compare notes”"
+                      className="flex-1 resize-none text-[11.5px] px-2.5 py-1.5 rounded-md border border-[var(--color-hairline)] bg-[var(--color-card)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-tertiary)] focus:outline-none focus:border-[var(--color-accent)]"
+                      style={{ transition: 'border-color 140ms var(--ease-out-quart)' }}
+                    />
+                    <button
+                      onClick={requestImprove}
+                      disabled={!replyText.trim()}
+                      className="shrink-0 text-[11px] font-semibold text-white bg-[var(--color-accent)] hover:bg-[var(--color-accent-deep)] disabled:opacity-40 disabled:cursor-not-allowed px-2.5 py-1.5 rounded-md"
+                      style={{ transition: 'all 140ms var(--ease-out-quart)' }}
+                    >
+                      Re-improve
+                    </button>
+                  </div>
+                  <p className="mt-1 text-[10px] text-[var(--color-text-tertiary)]">No em dashes is always on. ⌘↵ to re-run.</p>
+                </div>
               )}
             </div>
           )}
@@ -1515,6 +1748,34 @@ export function MessageThread() {
             </div>
           )}
 
+          {/* Hidden file input + staged-attachment chips (LinkedIn DM only). */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={(e) => onPickFiles(e.target.files)}
+          />
+          {pendingAttachments.length > 0 && (
+            <div className="flex flex-wrap gap-2 px-4 pt-3">
+              {pendingAttachments.map((a, i) => (
+                <div key={i} className="inline-flex items-center gap-2 pl-2.5 pr-1.5 py-1 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-hairline)] max-w-[220px]">
+                  {/^image\//.test(a.mediaType)
+                    ? <ImageIcon className="w-3.5 h-3.5 text-[var(--color-text-tertiary)] flex-shrink-0" />
+                    : <FileText className="w-3.5 h-3.5 text-[var(--color-text-tertiary)] flex-shrink-0" />}
+                  <span className="text-[11.5px] text-[var(--color-text-primary)] truncate">{a.name}</span>
+                  <button
+                    onClick={() => removeAttachment(i)}
+                    className="inline-flex items-center justify-center w-4 h-4 rounded text-[var(--color-text-tertiary)] hover:text-[var(--color-danger)] flex-shrink-0"
+                    title="Remove attachment"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
           <textarea
             ref={textareaRef}
             value={replyText}
@@ -1534,8 +1795,8 @@ export function MessageThread() {
               transition: 'min-height var(--dur-medium) var(--ease-out-fluid), box-shadow var(--dur-fast) var(--ease-out-soft)',
             }}
           />
-          <div className="flex items-center justify-between px-3 pb-2.5">
-            <div className="flex items-center gap-1">
+          <div className="flex items-center justify-between gap-2 px-3 pb-2.5 flex-wrap">
+            <div className="flex items-center gap-1 flex-wrap min-w-0">
               <button
                 onClick={requestDrafts}
                 disabled={draftsLoading}
@@ -1563,20 +1824,31 @@ export function MessageThread() {
                 <kbd className="kbd">/</kbd>
                 Snippets
               </button>
+              {attachmentsSupported && (
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="inline-flex items-center gap-1.5 text-[11px] font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] px-2 py-1 rounded-md hover:bg-[var(--color-surface-2)]"
+                  style={{ transition: 'background-color 140ms var(--ease-out-quart), color 140ms var(--ease-out-quart)' }}
+                  title="Attach a file or image"
+                >
+                  <Paperclip className="w-3 h-3" />
+                  Attach
+                </button>
+              )}
             </div>
             <button
               onClick={handleSend}
               disabled={
-                !replyText.trim() || sending || sentFlash ||
+                (!replyText.trim() && pendingAttachments.length === 0) || sending || sentFlash ||
                 // Draft-mode extra gates — must have recipient + channel.
                 (isDraft && (!primary || !draftChannel))
               }
               className={cn(
-                'flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-[12px] font-semibold',
+                'flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-[12px] font-semibold flex-shrink-0 ml-auto',
                 sentFlash && 'send-fly',
                 sentFlash
                   ? 'bg-[var(--color-success)] text-white'
-                  : replyText.trim() && !sending && (!isDraft || (primary && draftChannel))
+                  : (replyText.trim() || pendingAttachments.length > 0) && !sending && (!isDraft || (primary && draftChannel))
                     ? 'bg-[var(--color-accent-deep)] text-white hover:bg-[var(--color-accent)] active:scale-[0.97] active:shadow-inner'
                     : 'bg-[var(--color-surface-2)] text-[var(--color-text-muted)] cursor-not-allowed',
               )}

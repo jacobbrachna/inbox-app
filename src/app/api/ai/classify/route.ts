@@ -167,7 +167,8 @@ export async function POST(req: NextRequest) {
       ``,
       `Fields when followUp is non-null:`,
       `   • phrase: EXACT quote (≤200 chars) from the transcript that triggered the detection. This is what the user will see.`,
-      `   • date: ISO YYYY-MM-DD. ALWAYS in the future (> today). For "next week" use today+7. For relative ranges pick a sensible midpoint ("in a few weeks" → today+18). For event-anchored, use the event date if known.`,
+      `   • date: ISO YYYY-MM-DD — the ACTUAL date the commitment points to, anchored to the date of the MESSAGE that made it (every transcript line is dated [YYYY-MM-DD]), NOT to today. "next week" = that message's date + 7; "in a few weeks" = that message's date + 18; event-anchored = the event's date.`,
+      `   • LAPSED CHECK (critical — this is how stale threads get dropped): after computing that date, compare it to today (${todayIso}). If it is already in the PAST, the commitment has LAPSED — set followUp: null and treat the thread as ghosted in the summary. Do NOT roll a stale promise forward to a fresh future date. A would-be follow-up date that has already passed is the signal to DROP it, never to renew it.`,
       `   • kind: "commitment" or "soft" per the rules above.`,
       `   • actor: "self" (${myName} committed) | "them" (the other party committed) | "either" (mutual / unclear).`,
       feedbackHints ? `\nThe USER has previously flagged these phrases as false positives — do NOT re-trigger follow-ups on similar wording:\n${feedbackHints}` : '',
@@ -277,11 +278,19 @@ No prose, no markdown.`;
       ) {
         const phrase = r.followUp.phrase.slice(0, 240);
         let date: Date | null = null;
+        let lapsed = false;
         if (r.followUp.date) {
           const d = new Date(r.followUp.date);
-          if (!isNaN(d.getTime()) && d.getTime() > now.getTime()) date = d;
+          if (!isNaN(d.getTime())) {
+            if (d.getTime() > now.getTime()) date = d;
+            else lapsed = true; // model dated the commitment in the past → lapsed
+          }
         }
-        if (!date) {
+        // Only fuzzy-resolve the phrase when the model gave NO usable date at
+        // all. A past date is a deliberate "lapsed" signal — do NOT re-anchor
+        // the phrase to today and manufacture a fresh future date. That
+        // re-anchoring was the stale-followup bug (dead threads resurfacing).
+        if (!date && !lapsed) {
           const resolved = resolveFuzzyDate(phrase, now);
           if (resolved) date = resolved.date;
         }

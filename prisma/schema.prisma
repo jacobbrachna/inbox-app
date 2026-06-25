@@ -9,7 +9,16 @@ datasource db {
 model Conversation {
   id              String   @id
   source          String   @default("linkedin")
-  participants    String   // JSON array of Participant
+  participants    String   // JSON array of Participant (ALL members, incl. for groups)
+  // Group-thread metadata. isGroup = the thread has >1 other participant
+  // besides me. memberCount = total people in the thread INCLUDING me.
+  // groupName = LinkedIn's thread name when set (groups can be named).
+  isGroup         Boolean  @default(false)
+  memberCount     Int?
+  groupName       String?
+  // Denormalized: true when any message in this thread has attachments. Lets
+  // the inbox list filter "Attachments" without loading every message.
+  hasAttachments  Boolean  @default(false)
   lastMessage     String   @default("")
   lastMessageAt   DateTime @default(now())
   unreadCount     Int      @default(0)
@@ -115,6 +124,11 @@ model Contact {
   conversationCount Int      @default(0)
   // Per-person notes, separate from per-thread Conversation.notes.
   notes             String   @default("")
+  // Set when the user dismisses this person from Tasks → New Connections.
+  // Non-null = hidden from that list (they don't want to message them).
+  // Independent of messaging: sending a first message moves them off the
+  // list via lastOutboundAt regardless of this flag.
+  tasksDismissedAt  DateTime?
   // Expanded LinkedIn enrichment (Phase 2) — captured by extension when
   // visiting a /in/* page. All optional.
   about             String?  // LinkedIn "About" section text
@@ -180,6 +194,12 @@ model Message {
   sentAt          DateTime
   isFromMe        Boolean  @default(false)
   rawData         String?  // Raw LinkedIn message JSON
+  // Media/attachments parsed from the message's renderContent[]. JSON array of
+  // MessageAttachment: { kind: 'image'|'file'|'audio'|'video', name?, mediaType?,
+  // byteSize?, remoteUrl?, localPath?, thumbRemoteUrl?, thumbLocalPath?,
+  // width?, height?, durationMs?, assetUrn? }. remoteUrl is LinkedIn's signed
+  // (expiring) URL; localPath is set once the extension downloads the bytes.
+  attachments     String?
   // Outcome tracking — populated for outbound (isFromMe=true) messages by
   // a 14-day forward look at inbound replies in the same conversation.
   // Powers the Phase 4 coach's "what's working" analysis.
@@ -264,6 +284,10 @@ model AppState {
   myEmploymentHistory   String?
   // When we last refreshed the user's own profile from LinkedIn.
   myProfileRefreshedAt  DateTime?
+  // Notification preferences (JSON, see lib/notification-prefs.ts):
+  // { enabled, sound, quietHours:{enabled,start,end}, types:{<kind>:{bell,desktop}} }.
+  // Null = defaults. Gates the in-app bell, desktop pings, and extension alerts.
+  notificationPrefs     String?
 }
 
 // User feedback on AI-set follow-ups. When the user clicks "wrong

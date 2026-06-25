@@ -28,6 +28,10 @@
 
   function leadingName(s) {
     if (!s) return '';
+    // LinkedIn aria-labels often read "View <Name>'s profile" or
+    // "Message <Name>" — strip a leading action verb so it isn't baked into
+    // the captured name (was producing contacts named "View Anastasija").
+    s = s.replace(/^(?:View|Message|Connect(?:\s+with)?|Follow|Invite)\s+/i, '');
     const boundary = s.search(/\p{Ll}\p{Lu}/u);
     if (boundary > 0) s = s.slice(0, boundary + 1);
     const m = s.match(/^(\p{Lu}[\p{Ll}'\-]+(?:\s+\p{Lu}[\p{Ll}.'\-]*\.?){1,3})/u);

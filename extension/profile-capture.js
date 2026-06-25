@@ -16,6 +16,14 @@
   let progressTimer = null;
   const CAPTURE_BUDGET_S = 25;
 
+  // Capture status now renders in the Relay side panel — NOT as an overlay on
+  // LinkedIn. We message the panel; it shows the checklist + Done button. This
+  // keeps linkedin.com's DOM untouched (compliance) and gets the popup off the
+  // page. Best-effort: if the panel isn't open, capture still runs silently.
+  function panelStatus(payload) {
+    try { chrome.runtime.sendMessage({ action: 'relay-capture-status', ...payload }); } catch {}
+  }
+
   // ── In-page progress card (LinkedIn-native styling) ────────────────────
   // Designed to blend with LinkedIn's UI: LinkedIn blue (#0A66C2), 8px card
   // radius, weight 600 type, native-feeling shadow. IP tile preserved so
@@ -720,6 +728,8 @@
     // Silent mode (messageable contact, no banner) → small bottom-right
     // toast so the user knows we refreshed their data. Auto-fades.
     if (!banner) showSilentToast(data);
+    // User-driven (Refresh-profile) capture → tell the side panel we're done.
+    if (udBanner) panelStatus({ phase: 'done', captured: udCaptured });
     // Notify background so it can close the tab early and unblock the UI.
     // 800ms delay so the user sees the "Captured ✓" confirmation flash.
     setTimeout(() => {
@@ -976,6 +986,13 @@
   let udCaptured = { name: false, about: false, experience: false, education: false, posts: 0 };
 
   function setupUserDrivenBanner() {
+    // Compliance: no injected on-page UI. The capture checklist + Done button
+    // live in the Relay side panel now. `udBanner` is a sentinel (not a DOM
+    // node) so the existing guards below stay active; UI goes out via messages.
+    udBanner = true;
+    panelStatus({ phase: 'capturing', captured: udCaptured });
+    return;
+    // eslint-disable-next-line no-unreachable
     try {
       if (!document.getElementById('relay-ud-style')) {
         const style = document.createElement('style');
@@ -1079,31 +1096,8 @@
 
   function updateBannerChecklist() {
     if (!udBanner) return;
-    const flag = (key, on) => {
-      const node = udBanner.querySelector(`.relay-ud-check[data-key="${key}"]`);
-      if (!node) return;
-      node.classList.toggle('done', !!on);
-      node.classList.toggle('pending', !on);
-      const mark = node.querySelector('.relay-ud-mark');
-      if (mark) mark.textContent = on ? '✓' : '·';
-    };
-    flag('about', udCaptured.about);
-    flag('experience', udCaptured.experience);
-    flag('education', udCaptured.education);
-    const postsNode = udBanner.querySelector('.relay-ud-check[data-key="posts"]');
-    if (postsNode) {
-      const on = udCaptured.posts > 0;
-      postsNode.classList.toggle('done', on);
-      postsNode.classList.toggle('pending', !on);
-      const mark = postsNode.querySelector('.relay-ud-mark');
-      if (mark) mark.textContent = on ? '✓' : '·';
-      postsNode.lastChild.textContent = `Posts (${udCaptured.posts})`;
-    }
-    const total = 4;
-    const done = (udCaptured.about ? 1 : 0) + (udCaptured.experience ? 1 : 0) + (udCaptured.education ? 1 : 0) + (udCaptured.posts > 0 ? 1 : 0);
-    const pct = Math.round((done / total) * 100);
-    const fill = udBanner.querySelector('.relay-ud-fill');
-    if (fill) fill.style.width = `${pct}%`;
+    // UI lives in the side panel — just push the latest checklist state.
+    panelStatus({ phase: 'capturing', captured: udCaptured });
   }
 
   function reExtractUserDriven() {
@@ -1138,26 +1132,15 @@
   function startCountdown(userClicked) {
     if (sent || udCountdownTimer) return;
     udCountdownRemaining = 5;
-    if (udBanner) {
-      udBanner.classList.add('finishing');
-      const status = udBanner.querySelector('.relay-ud-status');
-      const hint = udBanner.querySelector('.relay-ud-hint');
-      const btn = udBanner.querySelector('button.relay-ud-done');
-      if (status) status.textContent = userClicked ? 'Locking in what we have…' : 'Got it — sending you back to Relay';
-      if (hint) hint.textContent = '';
-      if (btn) {
-        btn.textContent = `Closing in ${udCountdownRemaining}s`;
-        btn.disabled = true;
-        btn.style.opacity = '0.6';
-        btn.style.cursor = 'default';
-      }
-    }
+    panelStatus({
+      phase: 'finishing',
+      captured: udCaptured,
+      countdown: udCountdownRemaining,
+      userClicked: !!userClicked,
+    });
     udCountdownTimer = setInterval(() => {
       udCountdownRemaining--;
-      if (udBanner) {
-        const btn = udBanner.querySelector('button.relay-ud-done');
-        if (btn) btn.textContent = `Closing in ${udCountdownRemaining}s`;
-      }
+      panelStatus({ phase: 'finishing', captured: udCaptured, countdown: Math.max(0, udCountdownRemaining) });
       if (udCountdownRemaining <= 0) {
         clearInterval(udCountdownTimer);
         udCountdownTimer = null;
@@ -1245,6 +1228,11 @@
     if (observer) { try { observer.disconnect(); } catch {} observer = null; }
     removeBanner();
     try { document.getElementById('relay-floating-btn')?.remove(); } catch {}
+    // Tear down the user-driven capture too, and clear the side-panel status.
+    if (udObserver) { try { udObserver.disconnect(); } catch {} udObserver = null; }
+    if (udIdleCheckTimer) { clearInterval(udIdleCheckTimer); udIdleCheckTimer = null; }
+    if (udCountdownTimer) { clearInterval(udCountdownTimer); udCountdownTimer = null; }
+    if (udBanner) { udBanner = null; panelStatus({ phase: 'idle' }); }
   }
 
   let lastPath = location.pathname;
@@ -1275,6 +1263,12 @@
         sent = false;
         startCapture({ silent: true });
         sendResponse({ ok: true, slug: location.pathname.match(/^\/in\/([^/?#]+)/)?.[1] || '' });
+      }
+      // "Done" pressed in the side panel during a user-driven capture →
+      // lock in what we have and finish (mirrors the old on-page Done button).
+      if (msg && msg.action === 'relay-capture-done') {
+        startCountdown(true);
+        sendResponse({ ok: true });
       }
       return false;
     });

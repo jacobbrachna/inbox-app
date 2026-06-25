@@ -8,6 +8,7 @@ import { useExtensionReady } from '@/lib/use-extension-ready';
 import { cn } from '@/lib/cn';
 import { AccentPicker } from '@/components/theme/accent-picker';
 import { AiSettings } from './ai-settings';
+import { NotificationSettings } from './notification-settings';
 import { YourContext } from './your-context';
 import { IcpBuilder } from './icp-builder';
 import { ZoominfoSettings } from './zoominfo-settings';
@@ -143,6 +144,13 @@ export function SettingsPanel() {
         <h3 className="eyebrow mb-3">AI</h3>
         <div className="card p-5">
           <AiSettings />
+        </div>
+      </section>
+
+      <section className="mb-8">
+        <h3 className="eyebrow mb-3">Notifications</h3>
+        <div className="card p-5">
+          <NotificationSettings />
         </div>
       </section>
 

@@ -31,8 +31,10 @@ const profileName = el('profileName'), profileHeadline = el('profileHeadline');
 const profilePills = el('profilePills'), profileContext = el('profileContext');
 const importBtn = el('importBtn');
 const searchInput = el('searchInput'), searchResults = el('searchResults');
-const syncBtn = el('syncBtn'), snSyncBtn = el('snSyncBtn');
+const syncBtn = el('syncBtn'), snSyncBtn = el('snSyncBtn'), connSyncBtn = el('connSyncBtn'), connFullBtn = el('connFullBtn');
 const progressEl = el('progress'), hintEl = el('hint');
+const captureSection = el('captureSection'), captureStatus = el('captureStatus');
+const captureChecklist = el('captureChecklist'), captureDoneBtn = el('captureDoneBtn');
 
 const SYNC_IDLE = `<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>`;
 const SYNC_RUN = `<svg width="14" height="14" class="spin" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 .49-4.79"></path></svg>`;
@@ -313,8 +315,89 @@ snSyncBtn.addEventListener('click', () => runSync(snSyncBtn, 'Sync Sales Navigat
   progressEl.textContent = `Synced ${r.threads ?? 0} SN threads · ${r.deepMsgs ?? 0} messages`;
 }));
 
-chrome.runtime.onMessage.addListener((msg) => {
+// Connections sync — opens the Connections page so its API response is
+// captured (connectedAt + company + avatar) and imported. Incremental by
+// default (stops at already-known connections); Full resync walks everything.
+function runConnSync(fullResync) {
+  connSyncBtn.disabled = true; if (connFullBtn) connFullBtn.disabled = true;
+  connSyncBtn.innerHTML = `${SYNC_RUN} ${fullResync ? 'Full resync…' : 'Syncing connections…'}`;
+  progressEl.textContent = '';
+  chrome.runtime.sendMessage({ action: 'harvestConnections', fullResync }, (response) => {
+    connSyncBtn.disabled = false; if (connFullBtn) connFullBtn.disabled = false;
+    connSyncBtn.innerHTML = `${SYNC_IDLE} Sync connections`;
+    if (chrome.runtime.lastError) { progressEl.textContent = 'Error: ' + chrome.runtime.lastError.message; return; }
+    progressEl.textContent = response?.ok
+      ? `Synced ${response.collected ?? 0} connections — dates & companies updating.`
+      : `Failed: ${response?.reason ?? 'error'}`;
+    renderProfile();
+  });
+}
+connSyncBtn?.addEventListener('click', () => runConnSync(false));
+connFullBtn?.addEventListener('click', () => runConnSync(true));
+
+// ── Profile-capture status (replaces the old on-page popup) ───────────────
+// The profile-capture content script messages us with checklist progress
+// during a Refresh-profile capture. We render it here in the panel and offer
+// the "Done" button — nothing is drawn over LinkedIn anymore.
+let captureTabId = null;
+let captureHideTimer = null;
+
+const CAP_ITEMS = [
+  ['about', 'About'],
+  ['experience', 'Experience'],
+  ['education', 'Education'],
+  ['posts', 'Posts'],
+];
+
+function renderCaptureStatus(state, tabId) {
+  if (!captureSection) return;
+  clearTimeout(captureHideTimer);
+
+  if (!state || state.phase === 'idle') {
+    captureSection.classList.add('hidden');
+    return;
+  }
+  captureTabId = tabId ?? captureTabId;
+  captureSection.classList.remove('hidden');
+
+  const c = state.captured || {};
+  // Status line.
+  if (state.phase === 'finishing') {
+    captureStatus.textContent = typeof state.countdown === 'number'
+      ? `Saving — back to Relay in ${state.countdown}s`
+      : 'Saving…';
+    captureDoneBtn.disabled = true;
+    captureDoneBtn.textContent = 'Saving…';
+  } else if (state.phase === 'done') {
+    captureStatus.textContent = 'Captured ✓';
+    captureDoneBtn.style.display = 'none';
+    captureHideTimer = setTimeout(() => captureSection.classList.add('hidden'), 2500);
+  } else {
+    captureStatus.textContent = 'Scroll the profile — we capture sections as they load.';
+    captureDoneBtn.disabled = false;
+    captureDoneBtn.style.display = '';
+    captureDoneBtn.textContent = 'Done — use what we have';
+  }
+
+  // Checklist pills.
+  captureChecklist.replaceChildren(...CAP_ITEMS.map(([key, label]) => {
+    const on = key === 'posts' ? (c.posts || 0) > 0 : !!c[key];
+    const text = key === 'posts' ? `${label} (${c.posts || 0})` : label;
+    return h('span', { class: 'pill' }, `${on ? '✓' : '·'} ${text}`);
+  }));
+}
+
+captureDoneBtn?.addEventListener('click', () => {
+  if (captureTabId == null) return;
+  captureDoneBtn.disabled = true;
+  try { chrome.tabs.sendMessage(captureTabId, { action: 'relay-capture-done' }); } catch {}
+});
+
+chrome.runtime.onMessage.addListener((msg, sender) => {
   if (msg?.action === 'progress' && typeof msg.message === 'string') progressEl.textContent = msg.message;
+  if (msg?.action === 'relay-capture-status') {
+    renderCaptureStatus(msg, sender?.tab?.id);
+  }
 });
 
 // ── Keep profile section current as tabs change ──────────────────────────

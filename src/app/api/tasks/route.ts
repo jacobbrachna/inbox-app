@@ -25,6 +25,11 @@ export interface NewConnectionItem {
   source: string | null;
   firstSeenAt: string;
   connectedOn: string | null;
+  // Identity keys — needed to build a sendable draft recipient (the
+  // new-thread send path requires a LinkedIn URN). profileSlug is the
+  // fallback identity used elsewhere in the app.
+  linkedinUrn: string | null;
+  profileSlug: string | null;
 }
 
 export interface FollowUpThread {
@@ -58,42 +63,60 @@ export async function GET(req: NextRequest) {
   const today = new Date();
   today.setHours(23, 59, 59, 999); // include anything due "today"
 
-  // 1. New Connections — Contacts with no outbound activity, anonymous excluded.
-  // Sort by connectedOn DESC (real LinkedIn connection date) when present,
-  // falling back to firstSeenAt for contacts with no CSV-export connection date.
-  const newConnContacts = await prisma.contact.findMany({
-    where: {
-      lastOutboundAt: null,
-      NOT: {
-        AND: [
-          { name: { in: ['LinkedIn User', 'LinkedIn Member'] } },
-          { linkedinUrn: null },
-          { profileSlug: null },
-        ],
-      },
-    },
-    orderBy: [
-      // Prisma puts NULLs last by default in DESC, which is what we want —
-      // real connection dates first, then "unknown" rows.
-      { connectedOn: 'desc' },
-      { firstSeenAt: 'desc' },
-    ],
-    take: NEW_CONNECTION_LIMIT,
+  // 1. New Connections — Contacts you've never messaged, cleaned up:
+  //   • Quality floor: must have a real name AND a real identity (URN/slug) —
+  //     drops the nameless harvested stubs that cluttered the list.
+  //   • Coworkers hidden by default (company == your current company).
+  //   • Recency window: once we know the real connection date, hide ones older
+  //     than the window (default 90d). Connections with no known date yet
+  //     (not synced) are kept so nothing silently vanishes pre-sync.
+  // Toggles: ?coworkers=1 to include coworkers, ?within=30|90|all.
+  const reqUrl = new URL(req.url);
+  const includeCoworkers = reqUrl.searchParams.get('coworkers') === '1';
+  const withinParam = reqUrl.searchParams.get('within') || '90';
+  const withinDays = withinParam === 'all' ? null : (Number(withinParam) || 90);
+
+  // Current company (to hide coworkers) from the user's employment history.
+  const appState = await prisma.appState.findUnique({ where: { id: 1 } });
+  let myCompany: string | null = null;
+  try {
+    const hist = appState?.myEmploymentHistory ? JSON.parse(appState.myEmploymentHistory) : [];
+    if (Array.isArray(hist) && hist.length) {
+      const current = hist.find((h) => h && !h.to) ?? hist[0];
+      myCompany = ((current?.company as string) || '').trim().toLowerCase() || null;
+    }
+  } catch { /* no employment history */ }
+
+  const baseWhere = {
+    lastOutboundAt: null,
+    tasksDismissedAt: null,
+    // Quality floor — real name + real identity.
+    name: { notIn: ['LinkedIn User', 'LinkedIn Member'] },
+    OR: [{ linkedinUrn: { not: null } }, { profileSlug: { not: null } }],
+  };
+
+  // Fetch a generous window (most-recent first), then apply coworker + recency
+  // filters in JS (company is free-text; the recency window only bites when a
+  // real connectedOn exists).
+  const rawConns = await prisma.contact.findMany({
+    where: baseWhere,
+    orderBy: [{ connectedOn: 'desc' }, { firstSeenAt: 'desc' }],
+    take: 600,
     select: {
-      id: true,
-      name: true,
-      avatarUrl: true,
-      profileUrl: true,
-      headline: true,
-      company: true,
-      role: true,
-      source: true,
-      firstSeenAt: true,
-      connectedOn: true,
+      id: true, name: true, avatarUrl: true, profileUrl: true, headline: true,
+      company: true, role: true, source: true, firstSeenAt: true, connectedOn: true,
+      linkedinUrn: true, profileSlug: true,
     },
   });
 
-  const newConnections: NewConnectionItem[] = newConnContacts.map((c) => ({
+  const cutoffMs = withinDays != null ? now - withinDays * DAY_MS : null;
+  const filteredConns = rawConns.filter((c) => {
+    if (!includeCoworkers && myCompany && c.company && c.company.trim().toLowerCase() === myCompany) return false;
+    if (cutoffMs != null && c.connectedOn && c.connectedOn.getTime() < cutoffMs) return false;
+    return true;
+  });
+
+  const newConnections: NewConnectionItem[] = filteredConns.slice(0, NEW_CONNECTION_LIMIT).map((c) => ({
     contactId: c.id,
     name: c.name,
     avatarUrl: c.avatarUrl,
@@ -104,19 +127,12 @@ export async function GET(req: NextRequest) {
     source: c.source,
     firstSeenAt: c.firstSeenAt.toISOString(),
     connectedOn: c.connectedOn?.toISOString() ?? null,
+    linkedinUrn: c.linkedinUrn,
+    profileSlug: c.profileSlug,
   }));
-  const newConnectionsTotal = await prisma.contact.count({
-    where: {
-      lastOutboundAt: null,
-      NOT: {
-        AND: [
-          { name: { in: ['LinkedIn User', 'LinkedIn Member'] } },
-          { linkedinUrn: null },
-          { profileSlug: null },
-        ],
-      },
-    },
-  });
+  // Total reflects the post-filter set we actually surface (capped at the
+  // 600 fetch window — good enough for the badge).
+  const newConnectionsTotal = filteredConns.length;
 
   // 2. Follow-ups Owed — conversations with followUpAt today or earlier,
   // grouped by contact. One row per person, soonest follow-up wins for sort.

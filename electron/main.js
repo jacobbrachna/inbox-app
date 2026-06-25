@@ -449,7 +449,25 @@ function startExtensionListener() {
   // other role. It also fires presence events so the renderer's
   // useExtensionReady() flips as soon as the extension connects.
   const wss = new WebSocketServer({ noServer: true });
-  const peers = new Set(); // { ws, role }
+  const peers = new Set(); // { ws, role, lastSeen }
+
+  // Action messages that perform a one-time, irreversible side-effect on
+  // LinkedIn/SN. These MUST execute exactly once. The extension can be
+  // connected by more than one peer at the same time — e.g. it's loaded in
+  // multiple Chrome profiles, or an MV3 service-worker restart left a stale
+  // socket open. Broadcasting these to every extension peer would fire the
+  // action multiple times: double-sending a message, creating duplicate
+  // threads, etc. So we deliver them to a SINGLE extension peer (the most
+  // recently active one). Idempotent traffic (refresh/sync/typing/inspect)
+  // still broadcasts — re-running it is harmless.
+  const UNICAST_TO_EXTENSION = new Set([
+    'relay-send-message',
+    'relay-new-thread-request',
+  ]);
+
+  function liveExtensionPeers() {
+    return [...peers].filter((p) => p.role === 'extension' && p.ws.readyState === 1);
+  }
 
   function announcePresence() {
     const extConnected = [...peers].some((p) => p.role === 'extension');
@@ -472,14 +490,16 @@ function startExtensionListener() {
   }, 20_000);
 
   wss.on('connection', (ws) => {
-    const peer = { ws, role: null };
+    const peer = { ws, role: null, lastSeen: Date.now() };
     peers.add(peer);
     ws.on('message', (raw) => {
+      // Track liveness so unicast can pick the most recently active peer.
+      peer.lastSeen = Date.now();
       let msg;
       try { msg = JSON.parse(raw.toString()); } catch { return; }
       if (msg && msg.type === '__hello') {
         peer.role = msg.role;
-        log(`ws peer connected role=${msg.role}`);
+        log(`ws peer connected role=${msg.role} (${liveExtensionPeers().length} ext peers live)`);
         announcePresence();
         return;
       }
@@ -490,9 +510,26 @@ function startExtensionListener() {
         try { ws.send(JSON.stringify({ type: '__pong' })); } catch {}
         return;
       }
-      // Forward to peers of the opposite role.
-      const dest = peer.role === 'extension' ? 'renderer' : 'extension';
       const payload = raw.toString();
+
+      // Exactly-once action from a renderer → deliver to ONE extension peer.
+      // Prevents a double-send when the extension is connected by multiple
+      // peers (e.g. loaded in two Chrome profiles, or a stale SW socket).
+      if (peer.role === 'renderer' && msg && UNICAST_TO_EXTENSION.has(msg.type)) {
+        const exts = liveExtensionPeers().sort((a, b) => b.lastSeen - a.lastSeen);
+        if (exts.length === 0) {
+          log(`ws unicast ${msg.type} dropped — no live extension peer`);
+        } else {
+          try { exts[0].ws.send(payload); } catch {}
+          if (exts.length > 1) {
+            log(`ws unicast ${msg.type} → 1 of ${exts.length} extension peers (suppressed ${exts.length - 1} duplicate send${exts.length - 1 > 1 ? 's' : ''})`);
+          }
+        }
+        return;
+      }
+
+      // Everything else: forward to all peers of the opposite role.
+      const dest = peer.role === 'extension' ? 'renderer' : 'extension';
       for (const p of peers) {
         if (p.role === dest && p.ws.readyState === 1) p.ws.send(payload);
       }

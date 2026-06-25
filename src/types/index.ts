@@ -25,6 +25,26 @@ export type Participant = {
   company?: string;
 };
 
+// A single piece of media on a message, parsed from LinkedIn renderContent[].
+// remoteUrl is LinkedIn's signed (expiring) URL; localPath is filled once the
+// extension downloads the bytes and POSTs them to /api/media/ingest, after
+// which the UI loads /api/media/<messageId>?i=<index>.
+export type MessageAttachmentKind = 'image' | 'file' | 'audio' | 'video';
+export type MessageAttachment = {
+  kind: MessageAttachmentKind;
+  name?: string;
+  mediaType?: string;       // MIME, e.g. application/pdf, audio/mp4
+  byteSize?: number;
+  remoteUrl?: string;       // LinkedIn signed URL (expires)
+  localPath?: string;       // filename within the media dir, once downloaded
+  thumbRemoteUrl?: string;  // video/image poster
+  thumbLocalPath?: string;
+  width?: number;
+  height?: number;
+  durationMs?: number;      // audio/video
+  assetUrn?: string;        // digitalmediaAsset urn — stable id
+};
+
 export type Message = {
   id: string;
   conversationId: string;
@@ -35,6 +55,7 @@ export type Message = {
   deliveredAt?: string;
   readAt?: string;
   isFromMe: boolean;
+  attachments?: MessageAttachment[];
 };
 
 export type RoleEntry = {
@@ -76,6 +97,13 @@ export type Conversation = {
   id: string;
   source: InboxSource;
   participants: Participant[];
+  // Group-thread metadata. isGroup = more than one other participant besides
+  // me. memberCount = total people in the thread including me. groupName =
+  // LinkedIn's thread name when the group is named.
+  isGroup?: boolean;
+  memberCount?: number | null;
+  groupName?: string | null;
+  hasAttachments?: boolean;
   lastMessage: string;
   lastMessageAt: string;
   lastMessageSenderId: string;
@@ -135,6 +163,7 @@ export type FilterView =
   | 'contacts'
   | 'review'
   | 'has-notes'
+  | 'attachments'
   | 'drafts'
   | `label:${string}`
   | `company:${string}`

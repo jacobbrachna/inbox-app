@@ -5,6 +5,7 @@ import { Bell, BellOff, MessageSquare, Sparkles, Briefcase, Clock, CheckCheck, X
 import { useStore } from '@/store';
 import { cn } from '@/lib/cn';
 import { storage } from '@/lib/storage';
+import { DEFAULT_NOTIFICATION_PREFS, shouldBell, shouldDesktop, type NotificationPrefs } from '@/lib/notification-prefs';
 import { formatDistanceToNowStrict } from 'date-fns';
 
 type Notification = {
@@ -99,7 +100,7 @@ export function NotificationBell() {
   // Hydrate seen-IDs from localStorage on mount.
   useEffect(() => { seenIdsRef.current = loadSeenIds(); }, []);
 
-  function fireDesktopAlert(n: Notification) {
+  function fireDesktopAlert(n: Notification, p: NotificationPrefs) {
     if (storage.notificationsMuted.get()) return;
     if (typeof window === 'undefined' || !('Notification' in window)) return;
     if (Notification.permission !== 'granted') return;
@@ -112,6 +113,7 @@ export function NotificationBell() {
         body: n.body,
         tag: `relay-${n.id}`, // dedupe at the OS level
         icon: '/favicon.ico',
+        silent: !p.sound,
       });
       dn.onclick = () => {
         window.focus();
@@ -129,24 +131,29 @@ export function NotificationBell() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await fetch('/api/notifications?limit=50');
-      const d = await r.json();
-      const list: Notification[] = d.notifications ?? [];
+      const [pr, nr] = await Promise.all([
+        fetch('/api/notifications/prefs').then((r) => r.json()).catch(() => null),
+        fetch('/api/notifications?limit=50').then((r) => r.json()),
+      ]);
+      const p: NotificationPrefs = pr?.prefs ?? DEFAULT_NOTIFICATION_PREFS;
+      const all: Notification[] = nr.notifications ?? [];
+      // Bell feed + count respect the per-type "bell" toggle.
+      const list = all.filter((n) => shouldBell(p, n.kind));
       setItems(list);
-      setUnread(d.unreadCount ?? 0);
+      setUnread(list.filter((n) => !n.read && !n.dismissed).length);
 
-      // Mirror unread items we haven't fired desktop alerts for yet.
-      // First poll after mount: seed the seen set with everything currently
-      // visible so we don't blast historical items as if they were new.
+      // Mirror unread items we haven't fired desktop alerts for yet. Iterate
+      // the FULL set (not the bell-filtered list) so a type with bell off but
+      // desktop on still pings. Gated per-type + master + quiet hours.
       const seen = seenIdsRef.current;
       if (seen.size === 0) {
-        for (const n of list) seen.add(n.id);
+        for (const n of all) seen.add(n.id);
         saveSeenIds(seen);
       } else {
-        for (const n of list) {
+        for (const n of all) {
           if (n.read || n.dismissed) continue;
           if (seen.has(n.id)) continue;
-          fireDesktopAlert(n);
+          if (shouldDesktop(p, n.kind)) fireDesktopAlert(n, p);
           seen.add(n.id);
         }
         saveSeenIds(seen);

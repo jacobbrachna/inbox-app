@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
+import { DEFAULT_NOTIFICATION_PREFS, shouldDesktop } from '@/lib/notification-prefs';
 import { Sidebar } from '@/components/sidebar/sidebar';
 import { ConversationList } from '@/components/conversation-list/conversation-list';
 import { MessageThread } from '@/components/message-thread/message-thread';
@@ -34,6 +35,24 @@ export default function Home() {
   // Bootstrap from DB on mount
   useEffect(() => {
     loadFromServer();
+  }, [loadFromServer]);
+
+  // One-time backfill: re-derive message attachments + group metadata from
+  // already-stored rawData (no re-sync). Guarded by localStorage so it runs
+  // once per machine; refreshes the conversation list afterward so groups +
+  // media show immediately.
+  useEffect(() => {
+    const KEY = 'relay-backfill-media-groups-v1';
+    if (typeof window === 'undefined' || localStorage.getItem(KEY)) return;
+    (async () => {
+      try {
+        const r = await fetch('/api/maintenance/backfill-attachments', { method: 'POST' });
+        if (r.ok) {
+          localStorage.setItem(KEY, new Date().toISOString());
+          await loadFromServer();
+        }
+      } catch { /* will retry next launch */ }
+    })();
   }, [loadFromServer]);
 
   // Listen for instant-update broadcasts from the extension (fired when
@@ -222,8 +241,16 @@ export default function Home() {
     // Permission is now requested explicitly from the bell popover header.
     // We don't auto-prompt here (Chrome ignores non-gesture requests anyway).
 
-    function checkFollowUps() {
+    async function checkFollowUps() {
       if (Notification.permission !== 'granted') return;
+      // Respect notification prefs (master switch, follow-up desktop toggle,
+      // quiet hours). Fetched fresh each run so settings changes take effect.
+      let prefs = DEFAULT_NOTIFICATION_PREFS;
+      try {
+        const pr = await fetch('/api/notifications/prefs').then((r) => r.json());
+        if (pr?.prefs) prefs = pr.prefs;
+      } catch { /* use defaults */ }
+      if (!shouldDesktop(prefs, 'follow-up-due')) return;
       const now = Date.now();
       const newlyAlerted: string[] = [];
       for (const c of convosRef.current) {
@@ -253,6 +280,7 @@ export default function Home() {
           const n = new Notification(`Follow up: ${name}`, {
             body,
             tag: `relay-followup-${c.id}`,
+            silent: !prefs.sound,
           });
           n.onclick = () => {
             window.focus();

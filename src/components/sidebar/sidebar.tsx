@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react';
 import {
   Inbox, Mail, Star, Clock, Archive, Settings,
   ChevronDown, ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight,
-  Plus, MessageSquare, TrendingUp, BarChart3, Activity, BellRing, Flame, Users, CheckSquare, HelpCircle, PanelLeftOpen, PanelLeftClose, Layout, Pencil,
+  Plus, MessageSquare, TrendingUp, BarChart3, Activity, BellRing, Flame, Users, CheckSquare, HelpCircle, PanelLeftOpen, PanelLeftClose, Layout, Pencil, Paperclip,
 } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { storage, type SidebarMode } from '@/lib/storage';
@@ -398,6 +398,12 @@ export function Sidebar() {
           count={overdueFollowUpCount}
           active={activeFilter === 'follow-up'}
           onClick={() => setActiveFilter('follow-up')}
+        />
+        <NavItem
+          icon={<Paperclip className="w-4 h-4" />}
+          label="Attachments"
+          active={activeFilter === 'attachments'}
+          onClick={() => setActiveFilter('attachments')}
         />
         <NavItem
           icon={<Archive className="w-4 h-4" />}

@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState, useMemo } from 'react';
-import { CheckSquare, UserPlus, BellRing, ExternalLink, RefreshCw, Sparkles, ChevronRight, Briefcase, ArrowRight } from 'lucide-react';
+import { CheckSquare, UserPlus, UserMinus, BellRing, ExternalLink, RefreshCw, Sparkles, ChevronRight, Briefcase, ArrowRight, MessageSquare, Archive, Check, X } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { useStore } from '@/store';
 
@@ -15,6 +15,8 @@ interface NewConnectionItem {
   source: string | null;
   firstSeenAt: string;
   connectedOn: string | null;
+  linkedinUrn: string | null;
+  profileSlug: string | null;
 }
 interface FollowUpThread {
   conversationId: string;
@@ -77,17 +79,25 @@ export function TasksPanel() {
   const [jobChanges, setJobChanges] = useState<JobChangeItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<Tab>('new');
+  // New Connections controls: hide coworkers (default) + recency window.
+  const [showCoworkers, setShowCoworkers] = useState(false);
+  const [within, setWithin] = useState<'30' | '90' | 'all'>('90');
   const setActiveConversationId = useStore((s) => s.setActiveConversationId);
   const setActiveFilter = useStore((s) => s.setActiveFilter);
+  const updateConversation = useStore((s) => s.updateConversation);
+  const loadFromServer = useStore((s) => s.loadFromServer);
   const currentRoleOnly = useStore((s) => s.currentRoleOnly);
   const currentRoleStart = useStore((s) => s.currentRoleStart);
 
-  function load() {
-    setLoading(true);
-    const roleQs = currentRoleOnly && currentRoleStart
-      ? `?roleStart=${encodeURIComponent(currentRoleStart)}` : '';
+  function load(silent = false) {
+    if (!silent) setLoading(true);
+    const params = new URLSearchParams();
+    if (currentRoleOnly && currentRoleStart) params.set('roleStart', currentRoleStart);
+    if (showCoworkers) params.set('coworkers', '1');
+    if (within !== '90') params.set('within', within);
+    const qs = params.toString() ? `?${params.toString()}` : '';
     return Promise.all([
-      fetch(`/api/tasks${roleQs}`).then((r) => r.json()),
+      fetch(`/api/tasks${qs}`).then((r) => r.json()),
       fetch('/api/tasks/job-changes').then((r) => r.json()).catch(() => ({ changes: [] })),
     ])
       .then(([t, j]: [TasksData, { changes: JobChangeItem[] }]) => {
@@ -99,11 +109,61 @@ export function TasksPanel() {
   }
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { load(); }, [currentRoleOnly, currentRoleStart]);
+  useEffect(() => { load(); }, [currentRoleOnly, currentRoleStart, showCoworkers, within]);
 
   function openConversation(id: string) {
     setActiveFilter('all');
     setActiveConversationId(id);
+  }
+
+  // Message a brand-new connection: there's no thread yet, so spin up a draft
+  // conversation pre-filled with this contact as the recipient (+ LinkedIn as
+  // the channel) and drop the user straight into the composer. Mirrors the
+  // sidebar's "New message" flow, minus the empty recipient picker. The send
+  // path needs the LinkedIn URN — if we don't have one the composer still opens
+  // and prompts the user to capture it by visiting the profile once.
+  async function messageConnection(c: NewConnectionItem) {
+    try {
+      const r = await fetch('/api/conversations/draft', { method: 'POST' });
+      if (!r.ok) return;
+      const d = await r.json();
+      const draftId = d.conversation.id;
+      await loadFromServer();
+      updateConversation(draftId, {
+        participants: [{
+          id: c.linkedinUrn ?? '',
+          name: c.name,
+          headline: c.headline ?? undefined,
+          avatarUrl: c.avatarUrl ?? undefined,
+          profileUrl: c.profileUrl ?? undefined,
+          company: c.company ?? undefined,
+        }],
+        source: 'linkedin',
+      });
+      setActiveFilter('drafts');
+      setActiveConversationId(draftId);
+    } catch {}
+  }
+
+  // Dismiss a connection off the New Connections list. The list removes the
+  // row optimistically; we persist the soft-hide flag, then silently refetch
+  // so the tab count stays accurate.
+  function dismissConnection(contactId: string) {
+    fetch('/api/tasks/dismiss-connection', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contactId }),
+    }).catch(() => {});
+    setTimeout(() => load(true), 500);
+  }
+
+  // Archive a conversation straight from the task list. The list removes the
+  // row optimistically; we persist via the store (which also mirrors the
+  // archive to LinkedIn/SN) and then silently refetch so the tab counts and
+  // any sibling threads stay accurate.
+  function archiveFromTasks(conversationId: string) {
+    updateConversation(conversationId, { status: 'archived' });
+    setTimeout(() => load(true), 500);
   }
 
   const tabs: Array<{ key: Tab; label: string; icon: typeof UserPlus; count: number; tone: string }> = useMemo(() => [
@@ -115,15 +175,15 @@ export function TasksPanel() {
   return (
     <div className="card flex-1 overflow-y-auto p-6 max-w-4xl">
       {/* Header */}
-      <div className="flex items-center justify-between mb-1">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg bg-[var(--color-accent-soft)] flex items-center justify-center">
+      <div className="flex items-center justify-between gap-2 mb-1">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="w-9 h-9 rounded-lg bg-[var(--color-accent-soft)] flex items-center justify-center flex-shrink-0">
             <CheckSquare className="w-4 h-4 text-[var(--color-accent-deep)]" strokeWidth={2.25} />
           </div>
-          <h1 className="text-[20px] font-semibold tracking-tight text-[var(--color-text-primary)]">Tasks</h1>
+          <h1 className="text-[20px] font-semibold tracking-tight text-[var(--color-text-primary)] truncate">Tasks</h1>
         </div>
         <button
-          onClick={load}
+          onClick={() => load()}
           disabled={loading}
           className="inline-flex items-center justify-center w-8 h-8 rounded-full text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-2)] disabled:opacity-40"
           style={{ transition: 'all 180ms var(--ease-out-quart)' }}
@@ -174,10 +234,44 @@ export function TasksPanel() {
       )}
 
       {data && tab === 'new' && (
-        <NewConnectionsList items={data.newConnections} total={data.newConnectionsTotal} />
+        <>
+          <div className="flex items-center gap-2 mb-3 flex-wrap">
+            <div className="inline-flex rounded-lg border border-[var(--color-hairline)] overflow-hidden">
+              {(['30', '90', 'all'] as const).map((w) => (
+                <button
+                  key={w}
+                  onClick={() => setWithin(w)}
+                  className={cn(
+                    'text-[11px] px-2.5 py-1 transition-colors',
+                    within === w
+                      ? 'bg-[var(--color-accent-soft)] text-[var(--color-accent-fg)] font-medium'
+                      : 'text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]',
+                  )}
+                >
+                  {w === 'all' ? 'All' : `Last ${w}d`}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => setShowCoworkers((v) => !v)}
+              className={cn(
+                'text-[11px] px-2.5 py-1 rounded-lg border transition-colors',
+                showCoworkers
+                  ? 'border-[var(--color-accent)] text-[var(--color-accent-fg)] bg-[var(--color-accent-soft)]'
+                  : 'border-[var(--color-hairline)] text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]',
+              )}
+            >
+              {showCoworkers ? 'Showing coworkers' : 'Hiding coworkers'}
+            </button>
+            <span className="text-[10.5px] text-[var(--color-text-tertiary)] ml-auto">
+              Dates &amp; companies fill in via the extension&rsquo;s &ldquo;Sync connections&rdquo;.
+            </span>
+          </div>
+          <NewConnectionsList items={data.newConnections} total={data.newConnectionsTotal} onMessage={messageConnection} onDismiss={dismissConnection} />
+        </>
       )}
       {data && tab === 'followups' && (
-        <FollowUpsList items={data.followUpsOwed} onOpen={openConversation} />
+        <FollowUpsList items={data.followUpsOwed} onOpen={openConversation} onArchive={archiveFromTasks} />
       )}
       {data && tab === 'jobs' && (
         <JobChangesList items={jobChanges} />
@@ -187,8 +281,28 @@ export function TasksPanel() {
 }
 
 // ── New Connections ──────────────────────────────────────────────────────
-function NewConnectionsList({ items, total }: { items: NewConnectionItem[]; total: number }) {
-  if (items.length === 0) {
+function NewConnectionsList({ items, total, onMessage, onDismiss }: {
+  items: NewConnectionItem[];
+  total: number;
+  onMessage: (c: NewConnectionItem) => void;
+  onDismiss: (contactId: string) => void;
+}) {
+  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(() => new Set());
+
+  function dismiss(contactId: string) {
+    setDismissedIds((prev) => { const next = new Set(prev); next.add(contactId); return next; });
+    setConfirmId(null);
+    onDismiss(contactId);
+  }
+
+  // Optimistic removal — a dismissed row vanishes instantly; the server
+  // refetch then trims the count to match.
+  const visibleItems = items.filter((c) => !dismissedIds.has(c.contactId));
+  // Keep the headline count honest after optimistic removals this session.
+  const visibleTotal = Math.max(0, total - dismissedIds.size);
+
+  if (visibleItems.length === 0) {
     return (
       <EmptyState
         icon={UserPlus}
@@ -200,15 +314,15 @@ function NewConnectionsList({ items, total }: { items: NewConnectionItem[]; tota
   return (
     <div>
       <p className="text-[11px] text-[var(--color-text-tertiary)] mb-3">
-        {total} connection{total === 1 ? '' : 's'} you haven&apos;t messaged yet. Showing the {items.length} most recent.
+        {visibleTotal} connection{visibleTotal === 1 ? '' : 's'} you haven&apos;t messaged yet. Showing the {visibleItems.length} most recent.
       </p>
       <div className="card overflow-hidden">
-        {items.map((c, i) => (
+        {visibleItems.map((c, i) => (
           <div
             key={c.contactId}
             className={cn(
               'w-full flex items-center gap-3 px-4 py-3',
-              i < items.length - 1 && 'border-b border-[var(--color-hairline)]',
+              i < visibleItems.length - 1 && 'border-b border-[var(--color-hairline)]',
             )}
           >
             <AvatarSquare name={c.name} src={c.avatarUrl} />
@@ -224,22 +338,62 @@ function NewConnectionsList({ items, total }: { items: NewConnectionItem[]; tota
               </div>
             </div>
             <div className="text-right flex-shrink-0 flex items-center gap-2">
-              <span className="text-[10.5px] text-[var(--color-text-tertiary)]">
-                {c.connectedOn
-                  ? `Connected ${relativeDate(c.connectedOn)}`
-                  : `Added ${relativeDate(c.firstSeenAt)}`}
-              </span>
-              {c.profileUrl && (
-                <a
-                  href={c.profileUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center justify-center w-7 h-7 rounded-md text-[var(--color-text-tertiary)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)]"
-                  title="Open LinkedIn profile"
-                  style={{ transition: 'all 140ms var(--ease-out-quart)' }}
-                >
-                  <ExternalLink className="w-3.5 h-3.5" />
-                </a>
+              {confirmId === c.contactId ? (
+                <div className="flex items-center gap-1">
+                  <span className="text-[10.5px] text-[var(--color-text-tertiary)] mr-0.5">Remove?</span>
+                  <button
+                    onClick={() => dismiss(c.contactId)}
+                    title="Confirm remove"
+                    className="inline-flex items-center justify-center w-7 h-7 rounded-md text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10"
+                    style={{ transition: 'all 140ms var(--ease-out-quart)' }}
+                  >
+                    <Check className="w-3.5 h-3.5" strokeWidth={2.5} />
+                  </button>
+                  <button
+                    onClick={() => setConfirmId(null)}
+                    title="Cancel"
+                    className="inline-flex items-center justify-center w-7 h-7 rounded-md text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-2)]"
+                    style={{ transition: 'all 140ms var(--ease-out-quart)' }}
+                  >
+                    <X className="w-3.5 h-3.5" strokeWidth={2.5} />
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <span className="text-[10.5px] text-[var(--color-text-tertiary)]">
+                    {c.connectedOn
+                      ? `Connected ${relativeDate(c.connectedOn)}`
+                      : `Added ${relativeDate(c.firstSeenAt)}`}
+                  </span>
+                  <button
+                    onClick={() => onMessage(c)}
+                    title="Message — opens a new draft to this person"
+                    className="inline-flex items-center justify-center w-7 h-7 rounded-md text-[var(--color-text-tertiary)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)]"
+                    style={{ transition: 'all 140ms var(--ease-out-quart)' }}
+                  >
+                    <MessageSquare className="w-3.5 h-3.5" />
+                  </button>
+                  {c.profileUrl && (
+                    <a
+                      href={c.profileUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center justify-center w-7 h-7 rounded-md text-[var(--color-text-tertiary)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)]"
+                      title="Open LinkedIn profile"
+                      style={{ transition: 'all 140ms var(--ease-out-quart)' }}
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                    </a>
+                  )}
+                  <button
+                    onClick={() => setConfirmId(c.contactId)}
+                    title="Remove from this list"
+                    className="inline-flex items-center justify-center w-7 h-7 rounded-md text-[var(--color-text-tertiary)] hover:text-[var(--color-danger)] hover:bg-[var(--color-surface-2)]"
+                    style={{ transition: 'all 140ms var(--ease-out-quart)' }}
+                  >
+                    <UserMinus className="w-3.5 h-3.5" />
+                  </button>
+                </>
               )}
             </div>
           </div>
@@ -251,9 +405,85 @@ function NewConnectionsList({ items, total }: { items: NewConnectionItem[]; tota
 
 // ── Hot Leads ────────────────────────────────────────────────────────────
 // ── Follow-ups Owed (per-contact) ────────────────────────────────────────
-function FollowUpsList({ items, onOpen }: { items: FollowUpContact[]; onOpen: (id: string) => void }) {
+// Per-row actions on a task: message the person (open the thread) or archive
+// them off the list. Archive is two-step — the first click arms an inline
+// "Archive?" confirm so a misclick can't silently remove someone.
+function RowActions({
+  confirming, onMessage, onRequestConfirm, onCancelConfirm, onArchive,
+}: {
+  confirming: boolean;
+  onMessage: () => void;
+  onRequestConfirm: () => void;
+  onCancelConfirm: () => void;
+  onArchive: () => void;
+}) {
+  if (confirming) {
+    return (
+      <div className="flex items-center gap-1 flex-shrink-0">
+        <span className="text-[10.5px] text-[var(--color-text-tertiary)] mr-0.5">Archive?</span>
+        <button
+          onClick={(e) => { e.stopPropagation(); onArchive(); }}
+          title="Confirm archive"
+          className="inline-flex items-center justify-center w-7 h-7 rounded-md text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10"
+          style={{ transition: 'all 140ms var(--ease-out-quart)' }}
+        >
+          <Check className="w-3.5 h-3.5" strokeWidth={2.5} />
+        </button>
+        <button
+          onClick={(e) => { e.stopPropagation(); onCancelConfirm(); }}
+          title="Cancel"
+          className="inline-flex items-center justify-center w-7 h-7 rounded-md text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-2)]"
+          style={{ transition: 'all 140ms var(--ease-out-quart)' }}
+        >
+          <X className="w-3.5 h-3.5" strokeWidth={2.5} />
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="flex items-center gap-0.5 flex-shrink-0">
+      <button
+        onClick={(e) => { e.stopPropagation(); onMessage(); }}
+        title="Open thread / send a message"
+        className="inline-flex items-center justify-center w-7 h-7 rounded-md text-[var(--color-text-tertiary)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)]"
+        style={{ transition: 'all 140ms var(--ease-out-quart)' }}
+      >
+        <MessageSquare className="w-3.5 h-3.5" />
+      </button>
+      <button
+        onClick={(e) => { e.stopPropagation(); onRequestConfirm(); }}
+        title="Archive — remove from tasks"
+        className="inline-flex items-center justify-center w-7 h-7 rounded-md text-[var(--color-text-tertiary)] hover:text-[var(--color-danger)] hover:bg-[var(--color-surface-2)]"
+        style={{ transition: 'all 140ms var(--ease-out-quart)' }}
+      >
+        <Archive className="w-3.5 h-3.5" />
+      </button>
+    </div>
+  );
+}
+
+function FollowUpsList({ items, onOpen, onArchive }: {
+  items: FollowUpContact[];
+  onOpen: (id: string) => void;
+  onArchive: (conversationId: string) => void;
+}) {
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
-  if (items.length === 0) {
+  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [archivedIds, setArchivedIds] = useState<Set<string>>(() => new Set());
+
+  function archive(conversationId: string) {
+    setArchivedIds((prev) => { const next = new Set(prev); next.add(conversationId); return next; });
+    setConfirmId(null);
+    onArchive(conversationId);
+  }
+
+  // Optimistic removal — an archived thread vanishes from the list instantly,
+  // and a person with no remaining follow-ups drops off entirely.
+  const visibleItems = items
+    .map((p) => ({ ...p, followUps: p.followUps.filter((f) => !archivedIds.has(f.conversationId)) }))
+    .filter((p) => p.followUps.length > 0);
+
+  if (visibleItems.length === 0) {
     return (
       <EmptyState
         icon={BellRing}
@@ -264,76 +494,85 @@ function FollowUpsList({ items, onOpen }: { items: FollowUpContact[]; onOpen: (i
   }
   return (
     <div className="card overflow-hidden">
-      {items.map((person, i) => {
+      {visibleItems.map((person, i) => {
         const key = person.contactId ?? person.followUps[0]?.conversationId ?? `idx:${i}`;
         const isExpanded = expandedKey === key;
-        const due = dueLabel(person.nextDaysUntilDue);
+        const soonest = person.followUps.reduce((a, b) =>
+          new Date(a.followUpAt).getTime() < new Date(b.followUpAt).getTime() ? a : b
+        );
+        const due = dueLabel(soonest.daysUntilDue);
         const toneClass =
           due.tone === 'overdue' ? 'bg-[var(--color-danger)]/10 text-[var(--color-danger)]'
           : due.tone === 'today' ? 'bg-[var(--color-accent-soft)] text-[var(--color-accent-fg)]'
           : 'bg-[var(--color-surface-2)] text-[var(--color-text-secondary)]';
-        const soonest = person.followUps.reduce((a, b) =>
-          new Date(a.followUpAt).getTime() < new Date(b.followUpAt).getTime() ? a : b
-        );
         const aiBadge = soonest.followUpSource === 'ai';
         const moreCount = person.followUps.length - 1;
         return (
           <div
             key={key}
-            className={cn(i < items.length - 1 && 'border-b border-[var(--color-hairline)]')}
+            className={cn(i < visibleItems.length - 1 && 'border-b border-[var(--color-hairline)]')}
           >
-            <button
-              onClick={() => {
-                if (moreCount > 0) {
-                  setExpandedKey(isExpanded ? null : key);
-                } else {
-                  onOpen(soonest.conversationId);
-                }
-              }}
-              className="w-full flex items-center gap-3 px-4 py-3 hover:bg-[var(--color-card-hover)] text-left"
+            <div
+              className="w-full flex items-center gap-3 px-4 py-3 hover:bg-[var(--color-card-hover)]"
               style={{ transition: 'background-color 140ms var(--ease-out-quart)' }}
             >
-              <AvatarSquare name={person.name} src={person.avatarUrl} />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-baseline gap-2">
-                  <span className="text-[13px] font-medium text-[var(--color-text-primary)] truncate">
-                    {person.name}
-                  </span>
-                  {person.company && (
-                    <span className="text-[11px] text-[var(--color-text-tertiary)] truncate">· {person.company}</span>
-                  )}
-                  {aiBadge && (
-                    <span className="inline-flex items-center gap-1 text-[9.5px] uppercase tracking-wide font-semibold text-[var(--color-accent)]">
-                      <Sparkles className="w-2.5 h-2.5" /> AI
+              <button
+                onClick={() => {
+                  if (moreCount > 0) setExpandedKey(isExpanded ? null : key);
+                  else onOpen(soonest.conversationId);
+                }}
+                className="flex items-center gap-3 min-w-0 flex-1 text-left"
+              >
+                <AvatarSquare name={person.name} src={person.avatarUrl} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-[13px] font-medium text-[var(--color-text-primary)] truncate">
+                      {person.name}
                     </span>
-                  )}
+                    {person.company && (
+                      <span className="text-[11px] text-[var(--color-text-tertiary)] truncate">· {person.company}</span>
+                    )}
+                    {aiBadge && (
+                      <span className="inline-flex items-center gap-1 text-[9.5px] uppercase tracking-wide font-semibold text-[var(--color-accent)]">
+                        <Sparkles className="w-2.5 h-2.5" /> AI
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[11px] text-[var(--color-text-tertiary)] truncate">
+                    {soonest.followUpReason ? `"${soonest.followUpReason}"` : (person.headline || '—')}
+                  </div>
                 </div>
-                <div className="text-[11px] text-[var(--color-text-tertiary)] truncate">
-                  {soonest.followUpReason ? `"${soonest.followUpReason}"` : (person.headline || '—')}
-                </div>
-              </div>
-              <div className="text-right flex-shrink-0 flex items-center gap-2">
+              </button>
+              <div className="flex-shrink-0 flex items-center gap-2">
                 <span className={cn('mono text-[10px] tabular-nums px-1.5 py-0.5 rounded font-semibold', toneClass)}>
                   {due.text}
                 </span>
                 {moreCount > 0 && (
-                  <span
-                    className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-surface-2)] text-[var(--color-text-tertiary)] font-medium"
+                  <button
+                    onClick={() => setExpandedKey(isExpanded ? null : key)}
+                    className="flex items-center gap-1"
                     title={`${moreCount} more follow-up${moreCount === 1 ? '' : 's'} on other threads`}
                   >
-                    +{moreCount}
-                  </span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-surface-2)] text-[var(--color-text-tertiary)] font-medium">
+                      +{moreCount}
+                    </span>
+                    <ChevronRight
+                      className={cn(
+                        'w-3.5 h-3.5 text-[var(--color-text-tertiary)] transition-transform',
+                        isExpanded && 'rotate-90',
+                      )}
+                    />
+                  </button>
                 )}
-                {moreCount > 0 && (
-                  <ChevronRight
-                    className={cn(
-                      'w-3.5 h-3.5 text-[var(--color-text-tertiary)] transition-transform',
-                      isExpanded && 'rotate-90',
-                    )}
-                  />
-                )}
+                <RowActions
+                  confirming={confirmId === soonest.conversationId}
+                  onMessage={() => onOpen(soonest.conversationId)}
+                  onRequestConfirm={() => setConfirmId(soonest.conversationId)}
+                  onCancelConfirm={() => setConfirmId(null)}
+                  onArchive={() => archive(soonest.conversationId)}
+                />
               </div>
-            </button>
+            </div>
             {isExpanded && moreCount > 0 && (
               <div className="bg-[var(--color-surface)] border-t border-[var(--color-hairline)]">
                 {person.followUps
@@ -346,19 +585,28 @@ function FollowUpsList({ items, onOpen }: { items: FollowUpContact[]; onOpen: (i
                       : td.tone === 'today' ? 'bg-[var(--color-accent-soft)] text-[var(--color-accent-fg)]'
                       : 'bg-[var(--color-surface-2)] text-[var(--color-text-secondary)]';
                     return (
-                      <button
+                      <div
                         key={thr.conversationId}
-                        onClick={() => onOpen(thr.conversationId)}
-                        className="w-full flex items-center gap-3 pl-16 pr-4 py-2 hover:bg-[var(--color-card-hover)] text-left text-[11.5px]"
+                        className="w-full flex items-center gap-3 pl-16 pr-4 py-2 hover:bg-[var(--color-card-hover)] text-[11.5px]"
                         style={{ transition: 'background-color 140ms var(--ease-out-quart)' }}
                       >
-                        <span className="flex-1 text-[var(--color-text-secondary)] truncate">
+                        <button
+                          onClick={() => onOpen(thr.conversationId)}
+                          className="flex-1 text-left text-[var(--color-text-secondary)] truncate"
+                        >
                           {thr.followUpReason ? `"${thr.followUpReason}"` : 'No reason'}
-                        </span>
+                        </button>
                         <span className={cn('mono text-[10px] tabular-nums px-1.5 py-0.5 rounded font-semibold', ttone)}>
                           {td.text}
                         </span>
-                      </button>
+                        <RowActions
+                          confirming={confirmId === thr.conversationId}
+                          onMessage={() => onOpen(thr.conversationId)}
+                          onRequestConfirm={() => setConfirmId(thr.conversationId)}
+                          onCancelConfirm={() => setConfirmId(null)}
+                          onArchive={() => archive(thr.conversationId)}
+                        />
+                      </div>
                     );
                   })}
               </div>
